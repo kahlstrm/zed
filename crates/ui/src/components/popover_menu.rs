@@ -110,10 +110,10 @@ impl<M: ManagedView> PopoverMenu<M> {
         })
     }
 
-    fn with_element_state<R>(
+    fn with_element_state<C: ElementContext, R>(
         &mut self,
-        cx: &mut ElementContext,
-        f: impl FnOnce(&mut Self, &mut PopoverMenuElementState<M>, &mut ElementContext) -> R,
+        cx: &mut C,
+        f: impl FnOnce(&mut Self, &mut PopoverMenuElementState<M>, &mut C) -> R,
     ) -> R {
         cx.with_element_state::<PopoverMenuElementState<M>, _>(
             Some(self.id.clone()),

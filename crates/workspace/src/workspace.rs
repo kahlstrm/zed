@@ -29,8 +29,9 @@ use gpui::{
     actions, canvas, impl_actions, point, relative, size, Action, AnyElement, AnyView, AnyWeakView,
     AppContext, AsyncAppContext, AsyncWindowContext, Bounds, DevicePixels, DragMoveEvent,
     Entity as _, EntityId, EventEmitter, FocusHandle, FocusableView, Global, KeyContext, Keystroke,
-    LayoutId, ManagedView, Model, ModelContext, PathPromptOptions, Point, PromptLevel, Render,
-    RequestLayoutContext, Size, Subscription, Task, View, WeakView, WindowHandle, WindowOptions,
+    LayoutId, ManagedView, Model, ModelContext, PaintContext, PathPromptOptions, Point,
+    PrepaintContext, PromptLevel, Render, RequestLayoutContext, Size, Subscription, Task, View,
+    WeakView, WindowHandle, WindowOptions,
 };
 use item::{
     FollowableItem, FollowableItemHandle, Item, ItemHandle, ItemSettings, PreviewTabsSettings,
@@ -78,9 +79,9 @@ use theme::{ActiveTheme, SystemAppearance, ThemeSettings};
 pub use toolbar::{Toolbar, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView};
 pub use ui;
 use ui::{
-    div, h_flex, Context as _, Div, Element, ElementContext, FluentBuilder,
-    InteractiveElement as _, IntoElement, Label, ParentElement as _, Pixels, SharedString,
-    Styled as _, ViewContext, VisualContext as _, WindowContext,
+    div, h_flex, Context as _, Div, Element, FluentBuilder, InteractiveElement as _, IntoElement,
+    Label, ParentElement as _, Pixels, SharedString, Styled as _, ViewContext, VisualContext as _,
+    WindowContext,
 };
 use util::ResultExt;
 use uuid::Uuid;
@@ -5002,7 +5003,7 @@ impl Element for DisconnectedOverlay {
         &mut self,
         bounds: Bounds<Pixels>,
         overlay: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) {
         cx.insert_hitbox(bounds, true);
         overlay.prepaint(cx);
@@ -5013,7 +5014,7 @@ impl Element for DisconnectedOverlay {
         _: Bounds<Pixels>,
         overlay: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         overlay.paint(cx)
     }

@@ -134,11 +134,10 @@ impl EditorElement {
 
     fn register_actions(&self, cx: &mut PaintContext) {
         let view = &self.editor;
-        view.update(cx, |editor, cx| {
-            for action in editor.editor_actions.iter() {
-                (action)(cx)
-            }
-        });
+        let actions = view.read(cx).editor_actions.clone();
+        for action in actions {
+            (action)(cx)
+        }
 
         crate::rust_analyzer_ext::apply_related_actions(view, cx);
         register_action(view, cx, Editor::move_left);
@@ -986,17 +985,20 @@ impl EditorElement {
                         line_height,
                         shape: selection.cursor_shape,
                         block_text,
-                        cursor_name: None,
+                        cursor_name: selection.user_name.clone().map(|name| CursorName {
+                            string: name,
+                            color: self.style.background,
+                            is_top_row: cursor_position.row() == 0,
+                        }),
                     };
-                    let cursor_name = selection.user_name.clone().map(|name| CursorName {
-                        string: name,
-                        color: self.style.background,
-                        is_top_row: cursor_position.row() == 0,
-                    });
-                    cx.with_element_context(|cx| cursor.layout(content_origin, cursor_name, cx));
                     cursors.push(cursor);
                 }
             }
+
+            for cursor in &mut cursors {
+                cursor.layout(content_origin, cx);
+            }
+
             cursors
         });
 
@@ -4221,31 +4223,12 @@ impl CursorLayout {
         cursor_name: Option<CursorName>,
         cx: &mut PrepaintContext,
     ) {
-        if let Some(cursor_name) = cursor_name {
-            let bounds = self.bounds(origin);
-            let text_size = self.line_height / 1.5;
-
-            let name_origin = if cursor_name.is_top_row {
-                point(bounds.right() - px(1.), bounds.top())
-            } else {
-                point(bounds.left(), bounds.top() - text_size / 2. - px(1.))
-            };
-            let mut name_element = div()
-                .bg(self.color)
-                .text_size(text_size)
-                .px_0p5()
-                .line_height(text_size + px(2.))
-                .text_color(cursor_name.color)
-                .child(cursor_name.string.clone())
-                .into_any_element();
-
-            name_element.prepaint_as_root(
+        if let Some(cursor_name) = self.cursor_name.as_mut() {
+            cursor_name.prepaint_as_root(
                 name_origin,
                 size(AvailableSpace::MinContent, AvailableSpace::MinContent),
                 cx,
             );
-
-            self.cursor_name = Some(name_element);
         }
     }
 

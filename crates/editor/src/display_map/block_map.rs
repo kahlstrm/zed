@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{EditorStyle, GutterDimensions};
 use collections::{Bound, HashMap, HashSet};
-use gpui::{AnyElement, ElementContext, Pixels, PrepaintContext};
+use gpui::{AnyElement, Pixels, PrepaintContext};
 use language::{BufferSnapshot, Chunk, Patch, Point};
 use multi_buffer::{Anchor, ExcerptId, ExcerptRange, ToPoint as _};
 use parking_lot::Mutex;
@@ -934,7 +934,7 @@ impl BlockDisposition {
 }
 
 impl<'a> Deref for BlockContext<'a, '_> {
-    type Target = ElementContext<'a>;
+    type Target = PrepaintContext<'a>;
 
     fn deref(&self) -> &Self::Target {
         self.context

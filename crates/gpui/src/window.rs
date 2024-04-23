@@ -3,7 +3,7 @@ use crate::{
     AppContext, Arena, Asset, AsyncWindowContext, AvailableSpace, Bounds, BoxShadow, Context,
     Corners, CursorStyle, DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree,
     DisplayId, Edges, Effect, Element, Entity, EntityId, EventEmitter, FileDropEvent, Flatten,
-    FontId, Global, GlobalElementId, GlyphId, Hsla, ImageData, InputHandler, KeyBinding,
+    FontId, Global, GlobalElementId, GlyphId, Hsla, ImageData, InputHandler, IsZero, KeyBinding,
     KeyContext, KeyDownEvent, KeyEvent, KeyMatch, KeymatchResult, Keystroke, KeystrokeEvent,
     LayoutId, LineLayoutIndex, Model, ModelContext, Modifiers, ModifiersChangedEvent,
     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
@@ -18,7 +18,7 @@ use crate::{
 use anyhow::{anyhow, Context as _, Result};
 use collections::{FxHashMap, FxHashSet};
 use derive_more::{Deref, DerefMut};
-use futures::{channel::oneshot, future::Shared};
+use futures::{channel::oneshot, future::Shared, FutureExt};
 use parking_lot::RwLock;
 use refineable::Refineable;
 use slotmap::SlotMap;
@@ -1306,16 +1306,23 @@ impl<'a> WindowContext<'a> {
 
         // Layout all root elements.
         let mut prepaint_cx = self.prepaint_context();
-        let mut root_element = self.window.root_view.as_ref().unwrap().clone().into_any();
+        let mut root_element = prepaint_cx
+            .window
+            .root_view
+            .as_ref()
+            .unwrap()
+            .clone()
+            .into_any();
         root_element.prepaint_as_root(
             Point::default(),
-            self.window.viewport_size.into(),
+            prepaint_cx.window.viewport_size.into(),
             &mut prepaint_cx,
         );
 
         let mut sorted_deferred_draws =
-            (0..self.window.next_frame.deferred_draws.len()).collect::<SmallVec<[_; 8]>>();
-        sorted_deferred_draws.sort_by_key(|ix| self.window.next_frame.deferred_draws[*ix].priority);
+            (0..prepaint_cx.window.next_frame.deferred_draws.len()).collect::<SmallVec<[_; 8]>>();
+        sorted_deferred_draws
+            .sort_by_key(|ix| prepaint_cx.window.next_frame.deferred_draws[*ix].priority);
         prepaint_cx.prepaint_deferred_draws(&sorted_deferred_draws);
 
         let mut prompt_element = None;
@@ -1344,7 +1351,7 @@ impl<'a> WindowContext<'a> {
 
         // Now actually paint the elements.
         let mut paint_cx = self.paint_context();
-        self.window.draw_phase = DrawPhase::Paint;
+        paint_cx.window.draw_phase = DrawPhase::Paint;
         root_element.paint(&mut paint_cx);
 
         paint_cx.paint_deferred_draws(&sorted_deferred_draws);
@@ -1427,7 +1434,7 @@ impl<'a> WindowContext<'a> {
     pub fn dispatch_event(&mut self, event: PlatformInput) -> DispatchEventResult {
         self.window.last_input_timestamp.set(Instant::now());
         // Handlers may set this to false by calling `stop_propagation`.
-        self.app.propagate_event = true;
+        self.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
         self.window.default_prevented = false;
 
@@ -1513,7 +1520,7 @@ impl<'a> WindowContext<'a> {
         }
 
         DispatchEventResult {
-            propagate: self.app.propagate_event,
+            propagate: self.propagate_event,
             default_prevented: self.window.default_prevented,
         }
     }
@@ -1526,28 +1533,26 @@ impl<'a> WindowContext<'a> {
         }
 
         let mut mouse_listeners = mem::take(&mut self.window.rendered_frame.mouse_listeners);
-        self.with_element_context(|cx| {
-            // Capture phase, events bubble from back to front. Handlers for this phase are used for
-            // special purposes, such as detecting events outside of a given Bounds.
-            for listener in &mut mouse_listeners {
+        // Capture phase, events bubble from back to front. Handlers for this phase are used for
+        // special purposes, such as detecting events outside of a given Bounds.
+        for listener in &mut mouse_listeners {
+            let listener = listener.as_mut().unwrap();
+            listener(event, DispatchPhase::Capture, self);
+            if !self.propagate_event {
+                break;
+            }
+        }
+
+        // Bubble phase, where most normal handlers do their work.
+        if self.propagate_event {
+            for listener in mouse_listeners.iter_mut().rev() {
                 let listener = listener.as_mut().unwrap();
-                listener(event, DispatchPhase::Capture, cx);
-                if !cx.app.propagate_event {
+                listener(event, DispatchPhase::Bubble, self);
+                if !self.propagate_event {
                     break;
                 }
             }
-
-            // Bubble phase, where most normal handlers do their work.
-            if cx.app.propagate_event {
-                for listener in mouse_listeners.iter_mut().rev() {
-                    let listener = listener.as_mut().unwrap();
-                    listener(event, DispatchPhase::Bubble, cx);
-                    if !cx.app.propagate_event {
-                        break;
-                    }
-                }
-            }
-        });
+        }
         self.window.rendered_frame.mouse_listeners = mouse_listeners;
 
         if self.has_active_drag() {
@@ -1669,9 +1674,7 @@ impl<'a> WindowContext<'a> {
             let node = self.window.rendered_frame.dispatch_tree.node(*node_id);
 
             for key_listener in node.key_listeners.clone() {
-                self.with_element_context(|cx| {
-                    key_listener(event, DispatchPhase::Capture, cx);
-                });
+                key_listener(event, DispatchPhase::Capture, self);
                 if !self.propagate_event {
                     return;
                 }
@@ -1683,9 +1686,7 @@ impl<'a> WindowContext<'a> {
             // Handle low level key events
             let node = self.window.rendered_frame.dispatch_tree.node(*node_id);
             for key_listener in node.key_listeners.clone() {
-                self.with_element_context(|cx| {
-                    key_listener(event, DispatchPhase::Bubble, cx);
-                });
+                key_listener(event, DispatchPhase::Bubble, self);
                 if !self.propagate_event {
                     return;
                 }
@@ -1704,9 +1705,7 @@ impl<'a> WindowContext<'a> {
         for node_id in dispatch_path.iter().rev() {
             let node = self.window.rendered_frame.dispatch_tree.node(*node_id);
             for listener in node.modifiers_changed_listeners.clone() {
-                self.with_element_context(|cx| {
-                    listener(event, cx);
-                });
+                listener(event, self);
                 if !self.propagate_event {
                     return;
                 }
@@ -1818,9 +1817,7 @@ impl<'a> WindowContext<'a> {
             {
                 let any_action = action.as_any();
                 if action_type == any_action.type_id() {
-                    self.with_element_context(|cx| {
-                        listener(any_action, DispatchPhase::Capture, cx);
-                    });
+                    listener(any_action, DispatchPhase::Capture, self);
 
                     if !self.propagate_event {
                         return;
@@ -1841,9 +1838,7 @@ impl<'a> WindowContext<'a> {
                 if action_type == any_action.type_id() {
                     self.propagate_event = false; // Actions stop propagation by default during the bubble phase
 
-                    self.with_element_context(|cx| {
-                        listener(any_action, DispatchPhase::Bubble, cx);
-                    });
+                    listener(any_action, DispatchPhase::Bubble, self);
 
                     if !self.propagate_event {
                         return;
@@ -2237,7 +2232,7 @@ impl<'a> BorrowMut<AppContext> for WindowContext<'a> {
 }
 
 /// This trait contains functionality that is shared across [`ViewContext`] and [`WindowContext`]
-pub trait BorrowWindow: BorrowMut<Window> + BorrowMut<AppContext> {
+pub trait BorrowWindow: BorrowMut<Window> + BorrowMut<AppContext> + Sized {
     #[doc(hidden)]
     fn app_mut(&mut self) -> &mut AppContext {
         self.borrow_mut()
@@ -2812,7 +2807,11 @@ impl<'a, V> std::ops::DerefMut for ViewContext<'a, V> {
     }
 }
 
+/// todo!
 pub trait ElementContext: BorrowWindow {
+    /// todo!
+    fn window_cx(&mut self) -> WindowContext;
+
     /// Push a view id onto the stack, and call a function with that view id active.
     fn with_view_id<F, R>(&mut self, view_id: EntityId, f: F) -> R
     where
@@ -2896,7 +2895,7 @@ pub trait ElementContext: BorrowWindow {
 
     /// Remove an asset from GPUI's cache
     fn remove_cached_asset<A: Asset + 'static>(&mut self, source: &A::Source) -> Option<A::Output> {
-        self.asset_cache.remove::<A>(source)
+        self.app_mut().asset_cache.remove::<A>(source)
     }
 
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
@@ -2907,9 +2906,10 @@ pub trait ElementContext: BorrowWindow {
     ///
     /// Use [Self::remove_cached_asset] to reload your asset.
     fn use_cached_asset<A: Asset + 'static>(&mut self, source: &A::Source) -> Option<A::Output> {
-        self.asset_cache.get::<A>(source).or_else(|| {
+        self.app().asset_cache.get::<A>(source).or_else(|| {
             if let Some(asset) = self.use_asset::<A>(source) {
-                self.asset_cache
+                self.app_mut()
+                    .asset_cache
                     .insert::<A>(source.to_owned(), asset.clone());
                 Some(asset)
             } else {
@@ -2929,37 +2929,34 @@ pub trait ElementContext: BorrowWindow {
         let asset_id = (TypeId::of::<A>(), hash(source));
         let mut is_first = false;
         let task = self
+            .app_mut()
             .loading_assets
             .remove(&asset_id)
             .map(|boxed_task| *boxed_task.downcast::<Shared<Task<A::Output>>>().unwrap())
             .unwrap_or_else(|| {
                 is_first = true;
-                let future = A::load(source.clone(), self);
-                let task = self.background_executor().spawn(future).shared();
+                let future = A::load(source.clone(), &mut self.window_cx());
+                let task = self.app().background_executor().spawn(future).shared();
                 task
             });
 
         task.clone().now_or_never().or_else(|| {
             if is_first {
                 let parent_id = self.parent_view_id();
-                self.spawn({
-                    let task = task.clone();
-                    |mut cx| async move {
-                        task.await;
-
-                        cx.on_next_frame(move |cx| {
-                            if let Some(parent_id) = parent_id {
-                                cx.notify(parent_id)
-                            } else {
-                                cx.refresh()
-                            }
-                        });
-                    }
-                })
-                .detach();
+                self.window_cx()
+                    .spawn({
+                        let task = task.clone();
+                        |mut cx| async move {
+                            task.await;
+                            cx.on_next_frame(move |cx| cx.notify(parent_id));
+                        }
+                    })
+                    .detach();
             }
 
-            self.loading_assets.insert(asset_id, Box::new(task));
+            self.app_mut()
+                .loading_assets
+                .insert(asset_id, Box::new(task));
 
             None
         })
@@ -3087,6 +3084,7 @@ pub trait ElementContext: BorrowWindow {
     }
 }
 
+/// todo!
 #[derive(Deref, DerefMut)]
 pub struct RequestLayoutContext<'a>(WindowContext<'a>);
 
@@ -3104,11 +3102,12 @@ impl<'a> RequestLayoutContext<'a> {
         self.app.layout_id_buffer.extend(children);
         let rem_size = self.rem_size();
 
-        self.window.layout_engine.as_mut().unwrap().request_layout(
-            style,
-            rem_size,
-            &self.cx.app.layout_id_buffer,
-        )
+        self.0
+            .window
+            .layout_engine
+            .as_mut()
+            .unwrap()
+            .request_layout(style, rem_size, &self.0.app.layout_id_buffer)
     }
 
     /// Add a node to the layout tree for the current frame. Instead of taking a `Style` and children,
@@ -3158,7 +3157,14 @@ impl BorrowMut<Window> for RequestLayoutContext<'_> {
     }
 }
 
-impl ElementContext for RequestLayoutContext<'_> {}
+impl ElementContext for RequestLayoutContext<'_> {
+    fn window_cx(&mut self) -> WindowContext {
+        WindowContext {
+            app: &mut self.0.app,
+            window: &mut self.0.window,
+        }
+    }
+}
 
 impl Context for RequestLayoutContext<'_> {
     type Result<T> = T;
@@ -3267,6 +3273,7 @@ impl VisualContext for RequestLayoutContext<'_> {
     }
 }
 
+/// todo!
 #[derive(Deref, DerefMut)]
 pub struct PrepaintContext<'a>(RequestLayoutContext<'a>);
 
@@ -3367,7 +3374,7 @@ impl<'a> PrepaintContext<'a> {
         absolute_offset: Point<Pixels>,
         priority: usize,
     ) {
-        let window = &mut self.cx.window;
+        let window = &mut self.window;
         assert_eq!(
             window.draw_phase,
             DrawPhase::Prepaint,
@@ -3589,7 +3596,14 @@ impl BorrowMut<Window> for PrepaintContext<'_> {
     }
 }
 
-impl ElementContext for PrepaintContext<'_> {}
+impl ElementContext for PrepaintContext<'_> {
+    fn window_cx(&mut self) -> WindowContext {
+        WindowContext {
+            app: &mut self.0 .0.app,
+            window: &mut self.0 .0.window,
+        }
+    }
+}
 
 impl Context for PrepaintContext<'_> {
     type Result<T> = T;
@@ -3698,10 +3712,25 @@ impl VisualContext for PrepaintContext<'_> {
     }
 }
 
+/// todo!
 #[derive(Deref, DerefMut)]
 pub struct PaintContext<'a>(WindowContext<'a>);
 
 impl<'a> PaintContext<'a> {
+    /// Obtain the bounds computed for the given LayoutId relative to the window. This method will usually be invoked by
+    /// GPUI itself automatically in order to pass your element its `Bounds` automatically.
+    pub fn layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
+        let mut bounds = self
+            .window
+            .layout_engine
+            .as_mut()
+            .unwrap()
+            .layout_bounds(layout_id)
+            .map(Into::into);
+        bounds.origin += self.element_offset();
+        bounds
+    }
+
     /// Sets the key context for the current element. This context will be used to translate
     /// keybindings into actions.
     pub fn set_key_context(&mut self, context: KeyContext) {
@@ -4258,7 +4287,14 @@ impl BorrowMut<Window> for PaintContext<'_> {
     }
 }
 
-impl ElementContext for PaintContext<'_> {}
+impl ElementContext for PaintContext<'_> {
+    fn window_cx(&mut self) -> WindowContext {
+        WindowContext {
+            app: &mut self.0.app,
+            window: &mut self.0.window,
+        }
+    }
+}
 
 impl Context for PaintContext<'_> {
     type Result<T> = T;

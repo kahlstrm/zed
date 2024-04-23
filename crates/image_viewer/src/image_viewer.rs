@@ -1,8 +1,8 @@
 use gpui::{
     canvas, div, fill, img, opaque_grey, point, size, AnyElement, AppContext, Bounds, Context,
     EventEmitter, FocusHandle, FocusableView, Img, InteractiveElement, IntoElement, Model,
-    ObjectFit, ParentElement, Render, Styled, Task, View, ViewContext, VisualContext, WeakView,
-    WindowContext,
+    ObjectFit, PaintContext, ParentElement, Render, Styled, Task, View, ViewContext, VisualContext,
+    WeakView, WindowContext,
 };
 use persistence::IMAGE_VIEWER;
 use ui::prelude::*;
@@ -155,7 +155,7 @@ impl FocusableView for ImageView {
 
 impl Render for ImageView {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
-        let checkered_background = |bounds: Bounds<Pixels>, _, cx: &mut WindowContext| {
+        let checkered_background = |bounds: Bounds<Pixels>, _, cx: &mut PaintContext| {
             let square_size = 32.0;
 
             let start_y = bounds.origin.y.0;

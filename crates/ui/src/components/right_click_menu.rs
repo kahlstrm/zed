@@ -39,10 +39,10 @@ impl<M: ManagedView> RightClickMenu<M> {
         self
     }
 
-    fn with_element_state<R>(
+    fn with_element_state<C: ElementContext, R>(
         &mut self,
-        cx: &mut ElementContext,
-        f: impl FnOnce(&mut Self, &mut MenuHandleElementState<M>, &mut ElementContext) -> R,
+        cx: &mut C,
+        f: impl FnOnce(&mut Self, &mut MenuHandleElementState<M>, &mut C) -> R,
     ) -> R {
         cx.with_element_state::<MenuHandleElementState<M>, _>(
             Some(self.id.clone()),
@@ -195,42 +195,45 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
             let child_bounds = cx.layout_bounds(child_layout_id.unwrap());
 
             let hitbox_id = hitbox.id;
-            cx.on_mouse_event(move |event: &MouseDownEvent, phase, cx| {
-                if phase == DispatchPhase::Bubble
-                    && event.button == MouseButton::Right
-                    && hitbox_id.is_hovered(cx)
-                {
-                    cx.stop_propagation();
-                    cx.prevent_default();
+            cx.on_mouse_event(
+                move |event: &MouseDownEvent, phase, cx: &mut WindowContext| {
+                    if phase == DispatchPhase::Bubble
+                        && event.button == MouseButton::Right
+                        && hitbox_id.is_hovered(cx)
+                    {
+                        cx.stop_propagation();
+                        cx.prevent_default();
 
-                    let new_menu = (builder)(cx);
-                    let menu2 = menu.clone();
-                    let previous_focus_handle = cx.focused();
+                        let new_menu = (builder)(cx);
+                        let menu2 = menu.clone();
+                        let previous_focus_handle = cx.focused();
 
-                    cx.subscribe(&new_menu, move |modal, _: &DismissEvent, cx| {
-                        if modal.focus_handle(cx).contains_focused(cx) {
-                            if let Some(previous_focus_handle) = previous_focus_handle.as_ref() {
-                                cx.focus(previous_focus_handle);
+                        cx.subscribe(&new_menu, move |modal, _: &DismissEvent, cx| {
+                            if modal.focus_handle(cx).contains_focused(cx) {
+                                if let Some(previous_focus_handle) = previous_focus_handle.as_ref()
+                                {
+                                    cx.focus(previous_focus_handle);
+                                }
                             }
-                        }
-                        *menu2.borrow_mut() = None;
-                        cx.refresh();
-                    })
-                    .detach();
-                    cx.focus_view(&new_menu);
-                    *menu.borrow_mut() = Some(new_menu);
-                    *position.borrow_mut() = if child_layout_id.is_some() {
-                        if let Some(attach) = attach {
-                            attach.corner(child_bounds)
+                            *menu2.borrow_mut() = None;
+                            cx.refresh();
+                        })
+                        .detach();
+                        cx.focus_view(&new_menu);
+                        *menu.borrow_mut() = Some(new_menu);
+                        *position.borrow_mut() = if child_layout_id.is_some() {
+                            if let Some(attach) = attach {
+                                attach.corner(child_bounds)
+                            } else {
+                                cx.mouse_position()
+                            }
                         } else {
                             cx.mouse_position()
-                        }
-                    } else {
-                        cx.mouse_position()
-                    };
-                    cx.refresh();
-                }
-            });
+                        };
+                        cx.refresh();
+                    }
+                },
+            );
         })
     }
 }

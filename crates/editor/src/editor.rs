@@ -463,7 +463,7 @@ pub struct Editor {
     gutter_width: Pixels,
     pub vim_replace_map: HashMap<Range<usize>, String>,
     style: Option<EditorStyle>,
-    editor_actions: Vec<Box<dyn Fn(&mut WindowContext)>>,
+    editor_actions: Vec<Arc<dyn Fn(&mut PaintContext)>>,
     use_autoclose: bool,
     auto_replace_emoji_shortcode: bool,
     show_git_blame_gutter: bool,
@@ -10001,13 +10001,11 @@ impl Editor {
 
     pub fn register_action<A: Action>(
         &mut self,
+        cx: &mut ViewContext<Self>,
         listener: impl Fn(&A, &mut WindowContext) + 'static,
     ) -> &mut Self {
         let listener = Arc::new(listener);
-
         self.editor_actions.push(Box::new(move |cx| {
-            let _view = cx.view().clone();
-            let cx = cx.window_context();
             let listener = listener.clone();
             cx.on_action(TypeId::of::<A>(), move |action, phase, cx| {
                 let action = action.downcast_ref().unwrap();
