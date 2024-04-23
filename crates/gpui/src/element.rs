@@ -32,9 +32,9 @@
 //! your own custom layout algorithm or rendering a code editor.
 
 use crate::{
-    util::FluentBuilder, ArenaBox, AvailableSpace, Bounds, DispatchNodeId, ElementContext,
-    ElementId, LayoutId, PaintContext, Pixels, Point, PrepaintContext, RequestLayoutContext, Size,
-    ViewContext, WindowContext, ELEMENT_ARENA,
+    util::FluentBuilder, ArenaBox, AvailableSpace, Bounds, DispatchNodeId, ElementId, LayoutId,
+    PaintContext, Pixels, Point, PrepaintContext, RequestLayoutContext, Size, ViewContext,
+    WindowContext, ELEMENT_ARENA,
 };
 use derive_more::{Deref, DerefMut};
 pub(crate) use smallvec::SmallVec;
@@ -327,8 +327,10 @@ impl<E: Element> Drawable<E> {
         available_space: Size<AvailableSpace>,
         cx: &mut WindowContext,
     ) -> Size<Pixels> {
+        let mut cx = cx.prepaint_context();
+
         if matches!(&self.phase, ElementDrawPhase::Start) {
-            self.request_layout(cx);
+            self.request_layout(&mut cx);
         }
 
         let layout_id = match mem::take(&mut self.phase) {
@@ -454,7 +456,8 @@ impl AnyElement {
         available_space: Size<AvailableSpace>,
         cx: &mut WindowContext,
     ) {
-        self.layout_as_root(available_space, cx);
+        let mut cx = cx.prepaint_context();
+        self.layout_as_root(available_space, &mut cx);
         cx.with_absolute_element_offset(origin, |cx| self.0.prepaint(cx));
     }
 }

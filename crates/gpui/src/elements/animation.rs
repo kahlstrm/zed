@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    AnyElement, Element, ElementId, IntoElement, PaintContext, PrepaintContext,
+    AnyElement, Element, ElementContext, ElementId, IntoElement, PaintContext, PrepaintContext,
     RequestLayoutContext,
 };
 
@@ -124,13 +124,7 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
 
             if !done {
                 let parent_id = cx.parent_view_id();
-                cx.on_next_frame(move |cx| {
-                    if let Some(parent_id) = parent_id {
-                        cx.notify(parent_id)
-                    } else {
-                        cx.refresh()
-                    }
-                })
+                cx.on_next_frame(move |cx| cx.notify(parent_id));
             }
 
             ((element.request_layout(cx), element), Some(state))

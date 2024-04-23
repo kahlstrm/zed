@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::{
     point, px, size, AbsoluteLength, Asset, Bounds, DefiniteLength, DevicePixels, Element,
     ElementContext, Hitbox, ImageData, InteractiveElement, Interactivity, IntoElement, LayoutId,
-    Length, Pixels, PrepaintContext, RequestLayoutContext, SharedUri, Size, StyleRefinement,
-    Styled, SvgSize, UriOrPath, WindowContext,
+    Length, PaintContext, Pixels, PrepaintContext, RequestLayoutContext, SharedUri, Size,
+    StyleRefinement, Styled, SvgSize, UriOrPath, WindowContext,
 };
 use futures::{AsyncReadExt, Future};
 use image::{ImageBuffer, ImageError};
@@ -323,7 +323,7 @@ impl InteractiveElement for Img {
 }
 
 impl ImageSource {
-    fn data(&self, cx: &mut ElementContext) -> Option<Arc<ImageData>> {
+    fn data<C: ElementContext>(&self, cx: &mut C) -> Option<Arc<ImageData>> {
         match self {
             ImageSource::Uri(_) | ImageSource::File(_) => {
                 let uri_or_path: UriOrPath = match self {

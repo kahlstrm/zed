@@ -2,8 +2,8 @@ use smallvec::SmallVec;
 use taffy::style::{Display, Position};
 
 use crate::{
-    point, AnyElement, Bounds, Element, ElementContext, IntoElement, LayoutId, PaintContext,
-    ParentElement, Pixels, Point, PrepaintContext, RequestLayoutContext, Size, Style,
+    point, AnyElement, Bounds, Element, IntoElement, LayoutId, PaintContext, ParentElement, Pixels,
+    Point, PrepaintContext, RequestLayoutContext, Size, Style,
 };
 
 /// The state that the anchored element element uses to track its children.

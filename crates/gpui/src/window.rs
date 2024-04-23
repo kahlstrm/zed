@@ -287,6 +287,7 @@ pub struct Window {
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) root_view: Option<AnyView>,
+    pub(crate) view_id_stack: Vec<EntityId>,
     pub(crate) element_id_stack: GlobalElementId,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
@@ -326,7 +327,7 @@ pub struct Window {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DrawPhase {
     None,
-    Layout,
+    Prepaint,
     Paint,
     Focus,
 }
@@ -716,6 +717,7 @@ impl Window {
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
             root_view: None,
+            view_id_stack: Vec::new(),
             element_id_stack: GlobalElementId::default(),
             text_style_stack: Vec::new(),
             element_offset_stack: Vec::new(),
@@ -802,6 +804,24 @@ pub struct WindowContext<'a> {
 impl<'a> WindowContext<'a> {
     pub(crate) fn new(app: &'a mut AppContext, window: &'a mut Window) -> Self {
         Self { app, window }
+    }
+
+    pub(crate) fn request_layout_context(&mut self) -> RequestLayoutContext {
+        RequestLayoutContext(WindowContext {
+            app: &mut self.app,
+            window: &mut self.window,
+        })
+    }
+
+    pub(crate) fn prepaint_context(&mut self) -> PrepaintContext {
+        PrepaintContext(self.request_layout_context())
+    }
+
+    pub(crate) fn paint_context(&mut self) -> PaintContext {
+        PaintContext(WindowContext {
+            app: &mut self.app,
+            window: &mut self.window,
+        })
     }
 
     /// Obtain a handle to the window that belongs to this context.
@@ -1281,7 +1301,7 @@ impl<'a> WindowContext<'a> {
     }
 
     pub(crate) fn draw_roots(&mut self) {
-        self.window.draw_phase = DrawPhase::Layout;
+        self.window.draw_phase = DrawPhase::Prepaint;
         self.window.tooltip_bounds.take();
 
         // Layout all root elements.
@@ -2990,6 +3010,32 @@ impl<'a, V> std::ops::DerefMut for ViewContext<'a, V> {
 }
 
 pub trait ElementContext: BorrowWindow {
+    /// Push a view id onto the stack, and call a function with that view id active.
+    fn with_view_id<F, R>(&mut self, view_id: EntityId, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        let window = self.window_mut();
+        if window.view_id_stack.last().copied() != Some(view_id) {
+            window.view_id_stack.push(view_id);
+            if window.draw_phase == DrawPhase::Prepaint {
+                window.next_frame.dispatch_tree.set_view_id(view_id);
+            }
+
+            let result = f(self);
+
+            self.window_mut().view_id_stack.pop();
+            result
+        } else {
+            f(self)
+        }
+    }
+
+    /// Get the view id for the parent view
+    fn parent_view_id(&mut self) -> EntityId {
+        self.window_mut().view_id_stack.last().copied().unwrap()
+    }
+
     /// Push a text style onto the stack, and call a function with that style active.
     /// Use [`AppContext::text_style`] to get the current, combined text style.
     fn with_text_style<F, R>(&mut self, style: Option<TextStyleRefinement>, f: F) -> R
@@ -3255,12 +3301,11 @@ impl<'a> RequestLayoutContext<'a> {
         self.app.layout_id_buffer.extend(children);
         let rem_size = self.rem_size();
 
-        self.cx
-            .window
-            .layout_engine
-            .as_mut()
-            .unwrap()
-            .request_layout(style, rem_size, &self.cx.app.layout_id_buffer)
+        self.window.layout_engine.as_mut().unwrap().request_layout(
+            style,
+            rem_size,
+            &self.cx.app.layout_id_buffer,
+        )
     }
 
     /// Add a node to the layout tree for the current frame. Instead of taking a `Style` and children,
@@ -3311,6 +3356,113 @@ impl BorrowMut<Window> for RequestLayoutContext<'_> {
 }
 
 impl ElementContext for RequestLayoutContext<'_> {}
+
+impl Context for RequestLayoutContext<'_> {
+    type Result<T> = T;
+
+    fn new_model<T: 'static>(
+        &mut self,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Model<T> {
+        self.0.new_model(build_model)
+    }
+
+    fn reserve_model<T: 'static>(&mut self) -> Self::Result<crate::Reservation<T>> {
+        self.0.reserve_model()
+    }
+
+    fn insert_model<T: 'static>(
+        &mut self,
+        reservation: crate::Reservation<T>,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Self::Result<Model<T>> {
+        self.0.insert_model(reservation, build_model)
+    }
+
+    fn update_model<T, R>(
+        &mut self,
+        model: &Model<T>,
+        update: impl FnOnce(&mut T, &mut ModelContext<'_, T>) -> R,
+    ) -> R
+    where
+        T: 'static,
+    {
+        self.0.update_model(model, update)
+    }
+
+    fn read_model<T, R>(
+        &self,
+        model: &Model<T>,
+        read: impl FnOnce(&T, &AppContext) -> R,
+    ) -> Self::Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_model(model, read)
+    }
+
+    fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
+    where
+        F: FnOnce(AnyView, &mut WindowContext<'_>) -> T,
+    {
+        self.0.update_window(window, update)
+    }
+
+    fn read_window<T, R>(
+        &self,
+        window: &WindowHandle<T>,
+        read: impl FnOnce(View<T>, &AppContext) -> R,
+    ) -> Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_window(window, read)
+    }
+}
+
+impl VisualContext for RequestLayoutContext<'_> {
+    fn new_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.new_view(build_view)
+    }
+
+    fn update_view<V: 'static, R>(
+        &mut self,
+        view: &View<V>,
+        update: impl FnOnce(&mut V, &mut ViewContext<'_, V>) -> R,
+    ) -> Self::Result<R> {
+        self.0.update_view(view, update)
+    }
+
+    fn replace_root_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.replace_root_view(build_view)
+    }
+
+    fn focus_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: FocusableView,
+    {
+        self.0.focus_view(view)
+    }
+
+    fn dismiss_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: ManagedView,
+    {
+        self.0.dismiss_view(view)
+    }
+}
 
 #[derive(Deref, DerefMut)]
 pub struct PrepaintContext<'a>(RequestLayoutContext<'a>);
@@ -3415,7 +3567,7 @@ impl<'a> PrepaintContext<'a> {
         let window = &mut self.cx.window;
         assert_eq!(
             window.draw_phase,
-            DrawPhase::Layout,
+            DrawPhase::Prepaint,
             "defer_draw can only be called during request_layout or prepaint"
         );
         let parent_node = window.next_frame.dispatch_tree.active_node_id().unwrap();
@@ -3475,34 +3627,6 @@ impl<'a> PrepaintContext<'a> {
         window.next_frame.hitboxes.push(hitbox.clone());
         hitbox
     }
-
-    /// Sets the key context for the current element. This context will be used to translate
-    /// keybindings into actions.
-    pub fn set_key_context(&mut self, context: KeyContext) {
-        self.window
-            .next_frame
-            .dispatch_tree
-            .set_key_context(context);
-    }
-
-    /// Sets the focus handle for the current element. This handle will be used to manage focus state
-    /// and keyboard event dispatch for the element.
-    pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle) {
-        self.window
-            .next_frame
-            .dispatch_tree
-            .set_focus_id(focus_handle.id);
-    }
-
-    /// Sets the view id for the current element, which will be used to manage view caching.
-    pub fn set_view_id(&mut self, view_id: EntityId) {
-        self.window.next_frame.dispatch_tree.set_view_id(view_id);
-    }
-
-    /// Get the last view id for the current element
-    pub fn parent_view_id(&mut self) -> Option<EntityId> {
-        self.window.next_frame.dispatch_tree.parent_view_id()
-    }
 }
 
 impl Borrow<AppContext> for PrepaintContext<'_> {
@@ -3531,13 +3655,133 @@ impl BorrowMut<Window> for PrepaintContext<'_> {
 
 impl ElementContext for PrepaintContext<'_> {}
 
+impl Context for PrepaintContext<'_> {
+    type Result<T> = T;
+
+    fn new_model<T: 'static>(
+        &mut self,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Model<T> {
+        self.0.new_model(build_model)
+    }
+
+    fn reserve_model<T: 'static>(&mut self) -> Self::Result<crate::Reservation<T>> {
+        self.0.reserve_model()
+    }
+
+    fn insert_model<T: 'static>(
+        &mut self,
+        reservation: crate::Reservation<T>,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Self::Result<Model<T>> {
+        self.0.insert_model(reservation, build_model)
+    }
+
+    fn update_model<T, R>(
+        &mut self,
+        model: &Model<T>,
+        update: impl FnOnce(&mut T, &mut ModelContext<'_, T>) -> R,
+    ) -> R
+    where
+        T: 'static,
+    {
+        self.0.update_model(model, update)
+    }
+
+    fn read_model<T, R>(
+        &self,
+        model: &Model<T>,
+        read: impl FnOnce(&T, &AppContext) -> R,
+    ) -> Self::Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_model(model, read)
+    }
+
+    fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
+    where
+        F: FnOnce(AnyView, &mut WindowContext<'_>) -> T,
+    {
+        self.0.update_window(window, update)
+    }
+
+    fn read_window<T, R>(
+        &self,
+        window: &WindowHandle<T>,
+        read: impl FnOnce(View<T>, &AppContext) -> R,
+    ) -> Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_window(window, read)
+    }
+}
+
+impl VisualContext for PrepaintContext<'_> {
+    fn new_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.new_view(build_view)
+    }
+
+    fn update_view<V: 'static, R>(
+        &mut self,
+        view: &View<V>,
+        update: impl FnOnce(&mut V, &mut ViewContext<'_, V>) -> R,
+    ) -> Self::Result<R> {
+        self.0.update_view(view, update)
+    }
+
+    fn replace_root_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.replace_root_view(build_view)
+    }
+
+    fn focus_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: FocusableView,
+    {
+        self.0.focus_view(view)
+    }
+
+    fn dismiss_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: ManagedView,
+    {
+        self.0.dismiss_view(view)
+    }
+}
+
 #[derive(Deref, DerefMut)]
 pub struct PaintContext<'a>(WindowContext<'a>);
 
 impl<'a> PaintContext<'a> {
-    /// Get the last view id for the current element
-    pub fn parent_view_id(&mut self) -> Option<EntityId> {
-        self.window.next_frame.dispatch_tree.parent_view_id()
+    /// Sets the key context for the current element. This context will be used to translate
+    /// keybindings into actions.
+    pub fn set_key_context(&mut self, context: KeyContext) {
+        self.window
+            .next_frame
+            .dispatch_tree
+            .set_key_context(context);
+    }
+
+    /// Sets the focus handle for the current element. This handle will be used to manage focus state
+    /// and keyboard event dispatch for the element.
+    pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle) {
+        self.window
+            .next_frame
+            .dispatch_tree
+            .set_focus_id(focus_handle.id);
     }
 
     /// Updates the cursor style at the platform level.
@@ -4007,6 +4251,113 @@ impl BorrowMut<Window> for PaintContext<'_> {
 }
 
 impl ElementContext for PaintContext<'_> {}
+
+impl Context for PaintContext<'_> {
+    type Result<T> = T;
+
+    fn new_model<T: 'static>(
+        &mut self,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Model<T> {
+        self.0.new_model(build_model)
+    }
+
+    fn reserve_model<T: 'static>(&mut self) -> Self::Result<crate::Reservation<T>> {
+        self.0.reserve_model()
+    }
+
+    fn insert_model<T: 'static>(
+        &mut self,
+        reservation: crate::Reservation<T>,
+        build_model: impl FnOnce(&mut ModelContext<'_, T>) -> T,
+    ) -> Self::Result<Model<T>> {
+        self.0.insert_model(reservation, build_model)
+    }
+
+    fn update_model<T, R>(
+        &mut self,
+        model: &Model<T>,
+        update: impl FnOnce(&mut T, &mut ModelContext<'_, T>) -> R,
+    ) -> R
+    where
+        T: 'static,
+    {
+        self.0.update_model(model, update)
+    }
+
+    fn read_model<T, R>(
+        &self,
+        model: &Model<T>,
+        read: impl FnOnce(&T, &AppContext) -> R,
+    ) -> Self::Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_model(model, read)
+    }
+
+    fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
+    where
+        F: FnOnce(AnyView, &mut WindowContext<'_>) -> T,
+    {
+        self.0.update_window(window, update)
+    }
+
+    fn read_window<T, R>(
+        &self,
+        window: &WindowHandle<T>,
+        read: impl FnOnce(View<T>, &AppContext) -> R,
+    ) -> Result<R>
+    where
+        T: 'static,
+    {
+        self.0.read_window(window, read)
+    }
+}
+
+impl VisualContext for PaintContext<'_> {
+    fn new_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.new_view(build_view)
+    }
+
+    fn update_view<V: 'static, R>(
+        &mut self,
+        view: &View<V>,
+        update: impl FnOnce(&mut V, &mut ViewContext<'_, V>) -> R,
+    ) -> Self::Result<R> {
+        self.0.update_view(view, update)
+    }
+
+    fn replace_root_view<V>(
+        &mut self,
+        build_view: impl FnOnce(&mut ViewContext<'_, V>) -> V,
+    ) -> Self::Result<View<V>>
+    where
+        V: 'static + Render,
+    {
+        self.0.replace_root_view(build_view)
+    }
+
+    fn focus_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: FocusableView,
+    {
+        self.0.focus_view(view)
+    }
+
+    fn dismiss_view<V>(&mut self, view: &View<V>) -> Self::Result<()>
+    where
+        V: ManagedView,
+    {
+        self.0.dismiss_view(view)
+    }
+}
 
 // #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 slotmap::new_key_type! {

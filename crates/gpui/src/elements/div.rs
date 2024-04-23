@@ -1486,7 +1486,7 @@ impl Interactivity {
                     return ((), element_state);
                 }
 
-                style.paint(bounds, cx, |cx: &mut ElementContext| {
+                style.paint(bounds, cx, |cx| {
                     cx.with_text_style(style.text_style().cloned(), |cx| {
                         cx.with_content_mask(style.overflow_mask(bounds, cx.rem_size()), |cx| {
                             if let Some(hitbox) = hitbox {
@@ -1716,11 +1716,11 @@ impl Interactivity {
 
                                     let mut can_drop = true;
                                     if let Some(predicate) = &can_drop_predicate {
-                                        can_drop = predicate(drag.value.as_ref(), cx.deref_mut());
+                                        can_drop = predicate(drag.value.as_ref(), cx);
                                     }
 
                                     if can_drop {
-                                        listener(drag.value.as_ref(), cx.deref_mut());
+                                        listener(drag.value.as_ref(), cx);
                                         cx.refresh();
                                         cx.stop_propagation();
                                     }
@@ -1844,7 +1844,7 @@ impl Interactivity {
                         *was_hovered = is_hovered;
                         drop(was_hovered);
 
-                        hover_listener(&is_hovered, cx.deref_mut());
+                        hover_listener(&is_hovered, cx);
                     }
                 });
             }
@@ -2123,7 +2123,7 @@ impl Interactivity {
             if let Some(drag) = cx.active_drag.take() {
                 let mut can_drop = true;
                 if let Some(can_drop_predicate) = &self.can_drop_predicate {
-                    can_drop = can_drop_predicate(drag.value.as_ref(), cx.deref_mut());
+                    can_drop = can_drop_predicate(drag.value.as_ref(), cx);
                 }
 
                 if can_drop {
