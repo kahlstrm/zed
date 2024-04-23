@@ -98,10 +98,12 @@ impl<V: Render> Element for View<V> {
         &mut self,
         cx: &mut RequestLayoutContext,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-            let mut element = self.update(cx, |view, cx| view.render(cx).into_any_element());
-            let layout_id = element.request_layout(cx);
-            (layout_id, element)
+        cx.with_view_id(self.entity_id(), |cx| {
+            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                let mut element = self.update(cx, |view, cx| view.render(cx).into_any_element());
+                let layout_id = element.request_layout(cx);
+                (layout_id, element)
+            })
         })
     }
 
@@ -111,10 +113,11 @@ impl<V: Render> Element for View<V> {
         element: &mut Self::RequestLayoutState,
         cx: &mut PrepaintContext,
     ) {
-        cx.set_view_id(self.entity_id());
-        cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-            element.prepaint(cx)
-        })
+        cx.with_view_id(self.entity_id(), |cx| {
+            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                element.prepaint(cx)
+            })
+        });
     }
 
     fn paint(
@@ -124,8 +127,10 @@ impl<V: Render> Element for View<V> {
         _: &mut Self::PrepaintState,
         cx: &mut PaintContext,
     ) {
-        cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-            element.paint(cx)
+        cx.with_view_id(self.entity_id(), |cx| {
+            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                element.paint(cx)
+            })
         })
     }
 }
@@ -287,18 +292,20 @@ impl Element for AnyView {
         &mut self,
         cx: &mut RequestLayoutContext,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        if let Some(style) = self.cached_style.as_ref() {
-            let mut root_style = Style::default();
-            root_style.refine(style);
-            let layout_id = cx.request_layout(&root_style, None);
-            (layout_id, None)
-        } else {
-            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-                let mut element = (self.render)(self, cx);
-                let layout_id = element.request_layout(cx);
-                (layout_id, Some(element))
-            })
-        }
+        cx.with_view_id(self.entity_id(), |cx| {
+            if let Some(style) = self.cached_style.as_ref() {
+                let mut root_style = Style::default();
+                root_style.refine(style);
+                let layout_id = cx.request_layout(&root_style, None);
+                (layout_id, None)
+            } else {
+                cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                    let mut element = (self.render)(self, cx);
+                    let layout_id = element.request_layout(cx);
+                    (layout_id, Some(element))
+                })
+            }
+        })
     }
 
     fn prepaint(
@@ -307,58 +314,59 @@ impl Element for AnyView {
         element: &mut Self::RequestLayoutState,
         cx: &mut PrepaintContext,
     ) -> Option<AnyElement> {
-        cx.set_view_id(self.entity_id());
-        if self.cached_style.is_some() {
-            cx.with_element_state::<AnyViewState, _>(
-                Some(ElementId::View(self.entity_id())),
-                |element_state, cx| {
-                    let mut element_state = element_state.unwrap();
+        cx.with_view_id(self.entity_id(), |cx| {
+            if self.cached_style.is_some() {
+                cx.with_element_state::<AnyViewState, _>(
+                    Some(ElementId::View(self.entity_id())),
+                    |element_state, cx| {
+                        let mut element_state = element_state.unwrap();
 
-                    let content_mask = cx.content_mask();
-                    let text_style = cx.text_style();
+                        let content_mask = cx.content_mask();
+                        let text_style = cx.text_style();
 
-                    if let Some(mut element_state) = element_state {
-                        if element_state.cache_key.bounds == bounds
-                            && element_state.cache_key.content_mask == content_mask
-                            && element_state.cache_key.text_style == text_style
-                            && !cx.window.dirty_views.contains(&self.entity_id())
-                            && !cx.window.refreshing
-                        {
-                            let prepaint_start = cx.prepaint_index();
-                            cx.reuse_prepaint(element_state.prepaint_range.clone());
-                            let prepaint_end = cx.prepaint_index();
-                            element_state.prepaint_range = prepaint_start..prepaint_end;
-                            return (None, Some(element_state));
+                        if let Some(mut element_state) = element_state {
+                            if element_state.cache_key.bounds == bounds
+                                && element_state.cache_key.content_mask == content_mask
+                                && element_state.cache_key.text_style == text_style
+                                && !cx.window.dirty_views.contains(&self.entity_id())
+                                && !cx.window.refreshing
+                            {
+                                let prepaint_start = cx.prepaint_index();
+                                cx.reuse_prepaint(element_state.prepaint_range.clone());
+                                let prepaint_end = cx.prepaint_index();
+                                element_state.prepaint_range = prepaint_start..prepaint_end;
+                                return (None, Some(element_state));
+                            }
                         }
-                    }
 
-                    let prepaint_start = cx.prepaint_index();
-                    let mut element = (self.render)(self, cx);
-                    element.layout_as_root(bounds.size.into(), cx);
-                    element.prepaint_at(bounds.origin, cx);
-                    let prepaint_end = cx.prepaint_index();
+                        let prepaint_start = cx.prepaint_index();
+                        let mut element = (self.render)(self, cx);
+                        element.layout_as_root(bounds.size.into(), cx);
+                        element.prepaint_at(bounds.origin, cx);
+                        let prepaint_end = cx.prepaint_index();
 
-                    (
-                        Some(element),
-                        Some(AnyViewState {
-                            prepaint_range: prepaint_start..prepaint_end,
-                            paint_range: PaintIndex::default()..PaintIndex::default(),
-                            cache_key: ViewCacheKey {
-                                bounds,
-                                content_mask,
-                                text_style,
-                            },
-                        }),
-                    )
-                },
-            )
-        } else {
-            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-                let mut element = element.take().unwrap();
-                element.prepaint(cx);
-                Some(element)
-            })
-        }
+                        (
+                            Some(element),
+                            Some(AnyViewState {
+                                prepaint_range: prepaint_start..prepaint_end,
+                                paint_range: PaintIndex::default()..PaintIndex::default(),
+                                cache_key: ViewCacheKey {
+                                    bounds,
+                                    content_mask,
+                                    text_style,
+                                },
+                            }),
+                        )
+                    },
+                )
+            } else {
+                cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                    let mut element = element.take().unwrap();
+                    element.prepaint(cx);
+                    Some(element)
+                })
+            }
+        })
     }
 
     fn paint(
@@ -368,31 +376,33 @@ impl Element for AnyView {
         element: &mut Self::PrepaintState,
         cx: &mut PaintContext,
     ) {
-        if self.cached_style.is_some() {
-            cx.with_element_state::<AnyViewState, _>(
-                Some(ElementId::View(self.entity_id())),
-                |element_state, cx| {
-                    let mut element_state = element_state.unwrap().unwrap();
+        cx.with_view_id(self.entity_id(), |cx| {
+            if self.cached_style.is_some() {
+                cx.with_element_state::<AnyViewState, _>(
+                    Some(ElementId::View(self.entity_id())),
+                    |element_state, cx| {
+                        let mut element_state = element_state.unwrap().unwrap();
 
-                    let paint_start = cx.paint_index();
+                        let paint_start = cx.paint_index();
 
-                    if let Some(element) = element {
-                        element.paint(cx);
-                    } else {
-                        cx.reuse_paint(element_state.paint_range.clone());
-                    }
+                        if let Some(element) = element {
+                            element.paint(cx);
+                        } else {
+                            cx.reuse_paint(element_state.paint_range.clone());
+                        }
 
-                    let paint_end = cx.paint_index();
-                    element_state.paint_range = paint_start..paint_end;
+                        let paint_end = cx.paint_index();
+                        element_state.paint_range = paint_start..paint_end;
 
-                    ((), Some(element_state))
-                },
-            )
-        } else {
-            cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
-                element.as_mut().unwrap().paint(cx);
-            })
-        }
+                        ((), Some(element_state))
+                    },
+                )
+            } else {
+                cx.with_element_id(Some(ElementId::View(self.entity_id())), |cx| {
+                    element.as_mut().unwrap().paint(cx);
+                })
+            }
+        })
     }
 }
 

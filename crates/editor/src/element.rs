@@ -3366,49 +3366,51 @@ impl Element for EditorElement {
     type PrepaintState = EditorLayout;
 
     fn request_layout(&mut self, cx: &mut RequestLayoutContext) -> (gpui::LayoutId, ()) {
-        self.editor.update(cx, |editor, cx| {
-            editor.set_style(self.style.clone(), cx);
+        cx.with_view_id(self.editor.entity_id(), |cx| {
+            self.editor.update(cx, |editor, cx| {
+                editor.set_style(self.style.clone(), cx);
 
-            let layout_id = match editor.mode {
-                EditorMode::SingleLine => {
-                    let rem_size = cx.rem_size();
-                    let mut style = Style::default();
-                    style.size.width = relative(1.).into();
-                    style.size.height = self.style.text.line_height_in_pixels(rem_size).into();
-                    cx.with_element_context(|cx| cx.request_layout(&style, None))
-                }
-                EditorMode::AutoHeight { max_lines } => {
-                    let editor_handle = cx.view().clone();
-                    let max_line_number_width =
-                        self.max_line_number_width(&editor.snapshot(cx), cx);
-                    cx.with_element_context(|cx| {
-                        cx.request_measured_layout(
-                            Style::default(),
-                            move |known_dimensions, _, cx| {
-                                editor_handle
-                                    .update(cx, |editor, cx| {
-                                        compute_auto_height_layout(
-                                            editor,
-                                            max_lines,
-                                            max_line_number_width,
-                                            known_dimensions,
-                                            cx,
-                                        )
-                                    })
-                                    .unwrap_or_default()
-                            },
-                        )
-                    })
-                }
-                EditorMode::Full => {
-                    let mut style = Style::default();
-                    style.size.width = relative(1.).into();
-                    style.size.height = relative(1.).into();
-                    cx.with_element_context(|cx| cx.request_layout(&style, None))
-                }
-            };
+                let layout_id = match editor.mode {
+                    EditorMode::SingleLine => {
+                        let rem_size = cx.rem_size();
+                        let mut style = Style::default();
+                        style.size.width = relative(1.).into();
+                        style.size.height = self.style.text.line_height_in_pixels(rem_size).into();
+                        cx.with_element_context(|cx| cx.request_layout(&style, None))
+                    }
+                    EditorMode::AutoHeight { max_lines } => {
+                        let editor_handle = cx.view().clone();
+                        let max_line_number_width =
+                            self.max_line_number_width(&editor.snapshot(cx), cx);
+                        cx.with_element_context(|cx| {
+                            cx.request_measured_layout(
+                                Style::default(),
+                                move |known_dimensions, _, cx| {
+                                    editor_handle
+                                        .update(cx, |editor, cx| {
+                                            compute_auto_height_layout(
+                                                editor,
+                                                max_lines,
+                                                max_line_number_width,
+                                                known_dimensions,
+                                                cx,
+                                            )
+                                        })
+                                        .unwrap_or_default()
+                                },
+                            )
+                        })
+                    }
+                    EditorMode::Full => {
+                        let mut style = Style::default();
+                        style.size.width = relative(1.).into();
+                        style.size.height = relative(1.).into();
+                        cx.with_element_context(|cx| cx.request_layout(&style, None))
+                    }
+                };
 
-            (layout_id, ())
+                (layout_id, ())
+            })
         })
     }
 
@@ -3423,421 +3425,431 @@ impl Element for EditorElement {
             line_height: Some(self.style.text.line_height),
             ..Default::default()
         };
-        cx.set_view_id(self.editor.entity_id());
-        cx.with_text_style(Some(text_style), |cx| {
-            cx.with_content_mask(Some(ContentMask { bounds }), |cx| {
-                let mut snapshot = self.editor.update(cx, |editor, cx| editor.snapshot(cx));
-                let style = self.style.clone();
+        cx.with_view_id(self.editor.entity_id(), |cx| {
+            cx.with_text_style(Some(text_style), |cx| {
+                cx.with_content_mask(Some(ContentMask { bounds }), |cx| {
+                    let mut snapshot = self.editor.update(cx, |editor, cx| editor.snapshot(cx));
+                    let style = self.style.clone();
 
-                let font_id = cx.text_system().resolve_font(&style.text.font());
-                let font_size = style.text.font_size.to_pixels(cx.rem_size());
-                let line_height = style.text.line_height_in_pixels(cx.rem_size());
-                let em_width = cx
-                    .text_system()
-                    .typographic_bounds(font_id, font_size, 'm')
-                    .unwrap()
-                    .size
-                    .width;
-                let em_advance = cx
-                    .text_system()
-                    .advance(font_id, font_size, 'm')
-                    .unwrap()
-                    .width;
+                    let font_id = cx.text_system().resolve_font(&style.text.font());
+                    let font_size = style.text.font_size.to_pixels(cx.rem_size());
+                    let line_height = style.text.line_height_in_pixels(cx.rem_size());
+                    let em_width = cx
+                        .text_system()
+                        .typographic_bounds(font_id, font_size, 'm')
+                        .unwrap()
+                        .size
+                        .width;
+                    let em_advance = cx
+                        .text_system()
+                        .advance(font_id, font_size, 'm')
+                        .unwrap()
+                        .width;
 
-                let gutter_dimensions = snapshot.gutter_dimensions(
-                    font_id,
-                    font_size,
-                    em_width,
-                    self.max_line_number_width(&snapshot, cx),
-                    cx,
-                );
-                let text_width = bounds.size.width - gutter_dimensions.width;
-                let overscroll = size(em_width, px(0.));
-
-                snapshot = self.editor.update(cx, |editor, cx| {
-                    editor.last_bounds = Some(bounds);
-                    editor.gutter_width = gutter_dimensions.width;
-                    editor.set_visible_line_count(bounds.size.height / line_height, cx);
-
-                    let editor_width =
-                        text_width - gutter_dimensions.margin - overscroll.width - em_width;
-                    let wrap_width = match editor.soft_wrap_mode(cx) {
-                        SoftWrap::None => (MAX_LINE_LEN / 2) as f32 * em_advance,
-                        SoftWrap::EditorWidth => editor_width,
-                        SoftWrap::Column(column) => editor_width.min(column as f32 * em_advance),
-                    };
-
-                    if editor.set_wrap_width(Some(wrap_width), cx) {
-                        editor.snapshot(cx)
-                    } else {
-                        snapshot
-                    }
-                });
-
-                let wrap_guides = self
-                    .editor
-                    .read(cx)
-                    .wrap_guides(cx)
-                    .iter()
-                    .map(|(guide, active)| (self.column_pixels(*guide, cx), *active))
-                    .collect::<SmallVec<[_; 2]>>();
-
-                let hitbox = cx.insert_hitbox(bounds, false);
-                let gutter_hitbox = cx.insert_hitbox(
-                    Bounds {
-                        origin: bounds.origin,
-                        size: size(gutter_dimensions.width, bounds.size.height),
-                    },
-                    false,
-                );
-                let text_hitbox = cx.insert_hitbox(
-                    Bounds {
-                        origin: gutter_hitbox.upper_right(),
-                        size: size(text_width, bounds.size.height),
-                    },
-                    false,
-                );
-                // Offset the content_bounds from the text_bounds by the gutter margin (which
-                // is roughly half a character wide) to make hit testing work more like how we want.
-                let content_origin =
-                    text_hitbox.origin + point(gutter_dimensions.margin, Pixels::ZERO);
-
-                let mut autoscroll_requested = false;
-                let mut autoscroll_horizontally = false;
-                self.editor.update(cx, |editor, cx| {
-                    autoscroll_requested = editor.autoscroll_requested();
-                    autoscroll_horizontally = editor.autoscroll_vertically(bounds, line_height, cx);
-                    snapshot = editor.snapshot(cx);
-                });
-
-                let mut scroll_position = snapshot.scroll_position();
-                // The scroll position is a fractional point, the whole number of which represents
-                // the top of the window in terms of display rows.
-                let start_row = scroll_position.y as u32;
-                let height_in_lines = bounds.size.height / line_height;
-                let max_row = snapshot.max_point().row();
-
-                // Add 1 to ensure selections bleed off screen
-                let end_row =
-                    1 + cmp::min((scroll_position.y + height_in_lines).ceil() as u32, max_row);
-
-                let buffer_rows = snapshot
-                    .buffer_rows(start_row)
-                    .take((start_row..end_row).len());
-
-                let start_anchor = if start_row == 0 {
-                    Anchor::min()
-                } else {
-                    snapshot.buffer_snapshot.anchor_before(
-                        DisplayPoint::new(start_row, 0).to_offset(&snapshot, Bias::Left),
-                    )
-                };
-                let end_anchor = if end_row > max_row {
-                    Anchor::max()
-                } else {
-                    snapshot.buffer_snapshot.anchor_before(
-                        DisplayPoint::new(end_row, 0).to_offset(&snapshot, Bias::Right),
-                    )
-                };
-
-                let highlighted_rows = self
-                    .editor
-                    .update(cx, |editor, cx| editor.highlighted_display_rows(cx));
-                let highlighted_ranges = self.editor.read(cx).background_highlights_in_range(
-                    start_anchor..end_anchor,
-                    &snapshot.display_snapshot,
-                    cx.theme().colors(),
-                );
-
-                let redacted_ranges = self.editor.read(cx).redacted_ranges(
-                    start_anchor..end_anchor,
-                    &snapshot.display_snapshot,
-                    cx,
-                );
-
-                let (selections, active_rows, newest_selection_head) = self.layout_selections(
-                    start_anchor,
-                    end_anchor,
-                    &snapshot,
-                    start_row,
-                    end_row,
-                    cx,
-                );
-
-                let (line_numbers, fold_statuses) = self.layout_line_numbers(
-                    start_row..end_row,
-                    buffer_rows.clone(),
-                    &active_rows,
-                    newest_selection_head,
-                    &snapshot,
-                    cx,
-                );
-
-                let display_hunks = self.layout_git_gutters(start_row..end_row, &snapshot);
-
-                let mut max_visible_line_width = Pixels::ZERO;
-                let line_layouts =
-                    self.layout_lines(start_row..end_row, &line_numbers, &snapshot, cx);
-                for line_with_invisibles in &line_layouts {
-                    if line_with_invisibles.line.width > max_visible_line_width {
-                        max_visible_line_width = line_with_invisibles.line.width;
-                    }
-                }
-
-                let longest_line_width = layout_line(snapshot.longest_row(), &snapshot, &style, cx)
-                    .unwrap()
-                    .width;
-                let mut scroll_width =
-                    longest_line_width.max(max_visible_line_width) + overscroll.width;
-                let mut blocks = self.build_blocks(
-                    start_row..end_row,
-                    &snapshot,
-                    &hitbox,
-                    &text_hitbox,
-                    &mut scroll_width,
-                    &gutter_dimensions,
-                    em_width,
-                    gutter_dimensions.width + gutter_dimensions.margin,
-                    line_height,
-                    &line_layouts,
-                    cx,
-                );
-
-                let scroll_pixel_position = point(
-                    scroll_position.x * em_width,
-                    scroll_position.y * line_height,
-                );
-
-                let mut inline_blame = None;
-                if let Some(newest_selection_head) = newest_selection_head {
-                    let display_row = newest_selection_head.row();
-                    if (start_row..end_row).contains(&display_row) {
-                        let line_layout = &line_layouts[(display_row - start_row) as usize];
-                        inline_blame = self.layout_inline_blame(
-                            display_row,
-                            &snapshot.display_snapshot,
-                            line_layout,
-                            em_width,
-                            content_origin,
-                            scroll_pixel_position,
-                            line_height,
-                            cx,
-                        );
-                    }
-                }
-
-                let blamed_display_rows = self.layout_blame_entries(
-                    buffer_rows,
-                    em_width,
-                    scroll_position,
-                    line_height,
-                    &gutter_hitbox,
-                    gutter_dimensions.git_blame_entries_width,
-                    cx,
-                );
-
-                let scroll_max = point(
-                    ((scroll_width - text_hitbox.size.width) / em_width).max(0.0),
-                    max_row as f32,
-                );
-
-                self.editor.update(cx, |editor, cx| {
-                    let clamped = editor.scroll_manager.clamp_scroll_left(scroll_max.x);
-
-                    let autoscrolled = if autoscroll_horizontally {
-                        editor.autoscroll_horizontally(
-                            start_row,
-                            text_hitbox.size.width,
-                            scroll_width,
-                            em_width,
-                            &line_layouts,
-                            cx,
-                        )
-                    } else {
-                        false
-                    };
-
-                    if clamped || autoscrolled {
-                        snapshot = editor.snapshot(cx);
-                        scroll_position = snapshot.scroll_position();
-                    }
-                });
-
-                cx.with_element_id(Some("blocks"), |cx| {
-                    self.layout_blocks(
-                        &mut blocks,
-                        &hitbox,
-                        line_height,
-                        scroll_pixel_position,
+                    let gutter_dimensions = snapshot.gutter_dimensions(
+                        font_id,
+                        font_size,
+                        em_width,
+                        self.max_line_number_width(&snapshot, cx),
                         cx,
                     );
-                });
+                    let text_width = bounds.size.width - gutter_dimensions.width;
+                    let overscroll = size(em_width, px(0.));
 
-                let cursors = self.layout_cursors(
-                    &snapshot,
-                    &selections,
-                    start_row..end_row,
-                    &line_layouts,
-                    &text_hitbox,
-                    content_origin,
-                    scroll_position,
-                    scroll_pixel_position,
-                    line_height,
-                    em_width,
-                    autoscroll_requested,
-                    cx,
-                );
+                    snapshot = self.editor.update(cx, |editor, cx| {
+                        editor.last_bounds = Some(bounds);
+                        editor.gutter_width = gutter_dimensions.width;
+                        editor.set_visible_line_count(bounds.size.height / line_height, cx);
 
-                let scrollbar_layout =
-                    self.layout_scrollbar(&snapshot, bounds, scroll_position, height_in_lines, cx);
+                        let editor_width =
+                            text_width - gutter_dimensions.margin - overscroll.width - em_width;
+                        let wrap_width = match editor.soft_wrap_mode(cx) {
+                            SoftWrap::None => (MAX_LINE_LEN / 2) as f32 * em_advance,
+                            SoftWrap::EditorWidth => editor_width,
+                            SoftWrap::Column(column) => {
+                                editor_width.min(column as f32 * em_advance)
+                            }
+                        };
 
-                let folds = cx.with_element_id(Some("folds"), |cx| {
-                    self.layout_folds(
-                        &snapshot,
-                        content_origin,
+                        if editor.set_wrap_width(Some(wrap_width), cx) {
+                            editor.snapshot(cx)
+                        } else {
+                            snapshot
+                        }
+                    });
+
+                    let wrap_guides = self
+                        .editor
+                        .read(cx)
+                        .wrap_guides(cx)
+                        .iter()
+                        .map(|(guide, active)| (self.column_pixels(*guide, cx), *active))
+                        .collect::<SmallVec<[_; 2]>>();
+
+                    let hitbox = cx.insert_hitbox(bounds, false);
+                    let gutter_hitbox = cx.insert_hitbox(
+                        Bounds {
+                            origin: bounds.origin,
+                            size: size(gutter_dimensions.width, bounds.size.height),
+                        },
+                        false,
+                    );
+                    let text_hitbox = cx.insert_hitbox(
+                        Bounds {
+                            origin: gutter_hitbox.upper_right(),
+                            size: size(text_width, bounds.size.height),
+                        },
+                        false,
+                    );
+                    // Offset the content_bounds from the text_bounds by the gutter margin (which
+                    // is roughly half a character wide) to make hit testing work more like how we want.
+                    let content_origin =
+                        text_hitbox.origin + point(gutter_dimensions.margin, Pixels::ZERO);
+
+                    let mut autoscroll_requested = false;
+                    let mut autoscroll_horizontally = false;
+                    self.editor.update(cx, |editor, cx| {
+                        autoscroll_requested = editor.autoscroll_requested();
+                        autoscroll_horizontally =
+                            editor.autoscroll_vertically(bounds, line_height, cx);
+                        snapshot = editor.snapshot(cx);
+                    });
+
+                    let mut scroll_position = snapshot.scroll_position();
+                    // The scroll position is a fractional point, the whole number of which represents
+                    // the top of the window in terms of display rows.
+                    let start_row = scroll_position.y as u32;
+                    let height_in_lines = bounds.size.height / line_height;
+                    let max_row = snapshot.max_point().row();
+
+                    // Add 1 to ensure selections bleed off screen
+                    let end_row =
+                        1 + cmp::min((scroll_position.y + height_in_lines).ceil() as u32, max_row);
+
+                    let buffer_rows = snapshot
+                        .buffer_rows(start_row)
+                        .take((start_row..end_row).len());
+
+                    let start_anchor = if start_row == 0 {
+                        Anchor::min()
+                    } else {
+                        snapshot.buffer_snapshot.anchor_before(
+                            DisplayPoint::new(start_row, 0).to_offset(&snapshot, Bias::Left),
+                        )
+                    };
+                    let end_anchor = if end_row > max_row {
+                        Anchor::max()
+                    } else {
+                        snapshot.buffer_snapshot.anchor_before(
+                            DisplayPoint::new(end_row, 0).to_offset(&snapshot, Bias::Right),
+                        )
+                    };
+
+                    let highlighted_rows = self
+                        .editor
+                        .update(cx, |editor, cx| editor.highlighted_display_rows(cx));
+                    let highlighted_ranges = self.editor.read(cx).background_highlights_in_range(
                         start_anchor..end_anchor,
+                        &snapshot.display_snapshot,
+                        cx.theme().colors(),
+                    );
+
+                    let redacted_ranges = self.editor.read(cx).redacted_ranges(
+                        start_anchor..end_anchor,
+                        &snapshot.display_snapshot,
+                        cx,
+                    );
+
+                    let (selections, active_rows, newest_selection_head) = self.layout_selections(
+                        start_anchor,
+                        end_anchor,
+                        &snapshot,
+                        start_row,
+                        end_row,
+                        cx,
+                    );
+
+                    let (line_numbers, fold_statuses) = self.layout_line_numbers(
                         start_row..end_row,
-                        scroll_pixel_position,
+                        buffer_rows.clone(),
+                        &active_rows,
+                        newest_selection_head,
+                        &snapshot,
+                        cx,
+                    );
+
+                    let display_hunks = self.layout_git_gutters(start_row..end_row, &snapshot);
+
+                    let mut max_visible_line_width = Pixels::ZERO;
+                    let line_layouts =
+                        self.layout_lines(start_row..end_row, &line_numbers, &snapshot, cx);
+                    for line_with_invisibles in &line_layouts {
+                        if line_with_invisibles.line.width > max_visible_line_width {
+                            max_visible_line_width = line_with_invisibles.line.width;
+                        }
+                    }
+
+                    let longest_line_width =
+                        layout_line(snapshot.longest_row(), &snapshot, &style, cx)
+                            .unwrap()
+                            .width;
+                    let mut scroll_width =
+                        longest_line_width.max(max_visible_line_width) + overscroll.width;
+                    let mut blocks = self.build_blocks(
+                        start_row..end_row,
+                        &snapshot,
+                        &hitbox,
+                        &text_hitbox,
+                        &mut scroll_width,
+                        &gutter_dimensions,
+                        em_width,
+                        gutter_dimensions.width + gutter_dimensions.margin,
                         line_height,
                         &line_layouts,
                         cx,
-                    )
-                });
+                    );
 
-                let gutter_settings = EditorSettings::get_global(cx).gutter;
+                    let scroll_pixel_position = point(
+                        scroll_position.x * em_width,
+                        scroll_position.y * line_height,
+                    );
 
-                let mut context_menu_visible = false;
-                let mut code_actions_indicator = None;
-                if let Some(newest_selection_head) = newest_selection_head {
-                    if (start_row..end_row).contains(&newest_selection_head.row()) {
-                        context_menu_visible = self.layout_context_menu(
-                            line_height,
-                            &hitbox,
-                            &text_hitbox,
-                            content_origin,
-                            start_row,
-                            scroll_pixel_position,
-                            &line_layouts,
-                            newest_selection_head,
-                            cx,
-                        );
-                        if gutter_settings.code_actions {
-                            code_actions_indicator = self.layout_code_actions_indicator(
-                                line_height,
-                                newest_selection_head,
+                    let mut inline_blame = None;
+                    if let Some(newest_selection_head) = newest_selection_head {
+                        let display_row = newest_selection_head.row();
+                        if (start_row..end_row).contains(&display_row) {
+                            let line_layout = &line_layouts[(display_row - start_row) as usize];
+                            inline_blame = self.layout_inline_blame(
+                                display_row,
+                                &snapshot.display_snapshot,
+                                line_layout,
+                                em_width,
+                                content_origin,
                                 scroll_pixel_position,
-                                &gutter_dimensions,
-                                &gutter_hitbox,
+                                line_height,
                                 cx,
                             );
                         }
                     }
-                }
 
-                if !context_menu_visible && !cx.has_active_drag() {
-                    self.layout_hover_popovers(
-                        &snapshot,
-                        &hitbox,
-                        &text_hitbox,
-                        start_row..end_row,
-                        content_origin,
-                        scroll_pixel_position,
-                        &line_layouts,
-                        line_height,
+                    let blamed_display_rows = self.layout_blame_entries(
+                        buffer_rows,
                         em_width,
+                        scroll_position,
+                        line_height,
+                        &gutter_hitbox,
+                        gutter_dimensions.git_blame_entries_width,
                         cx,
                     );
-                }
 
-                let mouse_context_menu = self.layout_mouse_context_menu(cx);
+                    let scroll_max = point(
+                        ((scroll_width - text_hitbox.size.width) / em_width).max(0.0),
+                        max_row as f32,
+                    );
 
-                let fold_indicators = if gutter_settings.folds {
-                    cx.with_element_id(Some("gutter_fold_indicators"), |cx| {
-                        self.layout_gutter_fold_indicators(
-                            fold_statuses,
+                    self.editor.update(cx, |editor, cx| {
+                        let clamped = editor.scroll_manager.clamp_scroll_left(scroll_max.x);
+
+                        let autoscrolled = if autoscroll_horizontally {
+                            editor.autoscroll_horizontally(
+                                start_row,
+                                text_hitbox.size.width,
+                                scroll_width,
+                                em_width,
+                                &line_layouts,
+                                cx,
+                            )
+                        } else {
+                            false
+                        };
+
+                        if clamped || autoscrolled {
+                            snapshot = editor.snapshot(cx);
+                            scroll_position = snapshot.scroll_position();
+                        }
+                    });
+
+                    cx.with_element_id(Some("blocks"), |cx| {
+                        self.layout_blocks(
+                            &mut blocks,
+                            &hitbox,
                             line_height,
-                            &gutter_dimensions,
-                            gutter_settings,
                             scroll_pixel_position,
-                            &gutter_hitbox,
                             cx,
-                        )
-                    })
-                } else {
-                    Vec::new()
-                };
+                        );
+                    });
 
-                let invisible_symbol_font_size = font_size / 2.;
-                let tab_invisible = cx
-                    .text_system()
-                    .shape_line(
-                        "→".into(),
-                        invisible_symbol_font_size,
-                        &[TextRun {
-                            len: "→".len(),
-                            font: self.style.text.font(),
-                            color: cx.theme().colors().editor_invisible,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        }],
-                    )
-                    .unwrap();
-                let space_invisible = cx
-                    .text_system()
-                    .shape_line(
-                        "•".into(),
-                        invisible_symbol_font_size,
-                        &[TextRun {
-                            len: "•".len(),
-                            font: self.style.text.font(),
-                            color: cx.theme().colors().editor_invisible,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        }],
-                    )
-                    .unwrap();
-
-                EditorLayout {
-                    mode: snapshot.mode,
-                    position_map: Arc::new(PositionMap {
-                        size: bounds.size,
+                    let cursors = self.layout_cursors(
+                        &snapshot,
+                        &selections,
+                        start_row..end_row,
+                        &line_layouts,
+                        &text_hitbox,
+                        content_origin,
+                        scroll_position,
                         scroll_pixel_position,
-                        scroll_max,
-                        line_layouts,
                         line_height,
                         em_width,
-                        em_advance,
-                        snapshot,
-                    }),
-                    visible_display_row_range: start_row..end_row,
-                    wrap_guides,
-                    hitbox,
-                    text_hitbox,
-                    gutter_hitbox,
-                    gutter_dimensions,
-                    content_origin,
-                    scrollbar_layout,
-                    max_row,
-                    active_rows,
-                    highlighted_rows,
-                    highlighted_ranges,
-                    redacted_ranges,
-                    line_numbers,
-                    display_hunks,
-                    blamed_display_rows,
-                    inline_blame,
-                    folds,
-                    blocks,
-                    cursors,
-                    selections,
-                    mouse_context_menu,
-                    code_actions_indicator,
-                    fold_indicators,
-                    tab_invisible,
-                    space_invisible,
-                }
+                        autoscroll_requested,
+                        cx,
+                    );
+
+                    let scrollbar_layout = self.layout_scrollbar(
+                        &snapshot,
+                        bounds,
+                        scroll_position,
+                        height_in_lines,
+                        cx,
+                    );
+
+                    let folds = cx.with_element_id(Some("folds"), |cx| {
+                        self.layout_folds(
+                            &snapshot,
+                            content_origin,
+                            start_anchor..end_anchor,
+                            start_row..end_row,
+                            scroll_pixel_position,
+                            line_height,
+                            &line_layouts,
+                            cx,
+                        )
+                    });
+
+                    let gutter_settings = EditorSettings::get_global(cx).gutter;
+
+                    let mut context_menu_visible = false;
+                    let mut code_actions_indicator = None;
+                    if let Some(newest_selection_head) = newest_selection_head {
+                        if (start_row..end_row).contains(&newest_selection_head.row()) {
+                            context_menu_visible = self.layout_context_menu(
+                                line_height,
+                                &hitbox,
+                                &text_hitbox,
+                                content_origin,
+                                start_row,
+                                scroll_pixel_position,
+                                &line_layouts,
+                                newest_selection_head,
+                                cx,
+                            );
+                            if gutter_settings.code_actions {
+                                code_actions_indicator = self.layout_code_actions_indicator(
+                                    line_height,
+                                    newest_selection_head,
+                                    scroll_pixel_position,
+                                    &gutter_dimensions,
+                                    &gutter_hitbox,
+                                    cx,
+                                );
+                            }
+                        }
+                    }
+
+                    if !context_menu_visible && !cx.has_active_drag() {
+                        self.layout_hover_popovers(
+                            &snapshot,
+                            &hitbox,
+                            &text_hitbox,
+                            start_row..end_row,
+                            content_origin,
+                            scroll_pixel_position,
+                            &line_layouts,
+                            line_height,
+                            em_width,
+                            cx,
+                        );
+                    }
+
+                    let mouse_context_menu = self.layout_mouse_context_menu(cx);
+
+                    let fold_indicators = if gutter_settings.folds {
+                        cx.with_element_id(Some("gutter_fold_indicators"), |cx| {
+                            self.layout_gutter_fold_indicators(
+                                fold_statuses,
+                                line_height,
+                                &gutter_dimensions,
+                                gutter_settings,
+                                scroll_pixel_position,
+                                &gutter_hitbox,
+                                cx,
+                            )
+                        })
+                    } else {
+                        Vec::new()
+                    };
+
+                    let invisible_symbol_font_size = font_size / 2.;
+                    let tab_invisible = cx
+                        .text_system()
+                        .shape_line(
+                            "→".into(),
+                            invisible_symbol_font_size,
+                            &[TextRun {
+                                len: "→".len(),
+                                font: self.style.text.font(),
+                                color: cx.theme().colors().editor_invisible,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }],
+                        )
+                        .unwrap();
+                    let space_invisible = cx
+                        .text_system()
+                        .shape_line(
+                            "•".into(),
+                            invisible_symbol_font_size,
+                            &[TextRun {
+                                len: "•".len(),
+                                font: self.style.text.font(),
+                                color: cx.theme().colors().editor_invisible,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }],
+                        )
+                        .unwrap();
+
+                    EditorLayout {
+                        mode: snapshot.mode,
+                        position_map: Arc::new(PositionMap {
+                            size: bounds.size,
+                            scroll_pixel_position,
+                            scroll_max,
+                            line_layouts,
+                            line_height,
+                            em_width,
+                            em_advance,
+                            snapshot,
+                        }),
+                        visible_display_row_range: start_row..end_row,
+                        wrap_guides,
+                        hitbox,
+                        text_hitbox,
+                        gutter_hitbox,
+                        gutter_dimensions,
+                        content_origin,
+                        scrollbar_layout,
+                        max_row,
+                        active_rows,
+                        highlighted_rows,
+                        highlighted_ranges,
+                        redacted_ranges,
+                        line_numbers,
+                        display_hunks,
+                        blamed_display_rows,
+                        inline_blame,
+                        folds,
+                        blocks,
+                        cursors,
+                        selections,
+                        mouse_context_menu,
+                        code_actions_indicator,
+                        fold_indicators,
+                        tab_invisible,
+                        space_invisible,
+                    }
+                })
             })
         })
     }
@@ -3865,25 +3877,27 @@ impl Element for EditorElement {
             line_height: Some(self.style.text.line_height),
             ..Default::default()
         };
-        cx.with_text_style(Some(text_style), |cx| {
-            cx.with_content_mask(Some(ContentMask { bounds }), |cx| {
-                self.paint_mouse_listeners(layout, cx);
+        cx.with_view_id(self.editor.entity_id(), |cx| {
+            cx.with_text_style(Some(text_style), |cx| {
+                cx.with_content_mask(Some(ContentMask { bounds }), |cx| {
+                    self.paint_mouse_listeners(layout, cx);
 
-                self.paint_background(layout, cx);
-                if layout.gutter_hitbox.size.width > Pixels::ZERO {
-                    self.paint_gutter(layout, cx);
-                }
-                self.paint_text(layout, cx);
+                    self.paint_background(layout, cx);
+                    if layout.gutter_hitbox.size.width > Pixels::ZERO {
+                        self.paint_gutter(layout, cx);
+                    }
+                    self.paint_text(layout, cx);
 
-                if !layout.blocks.is_empty() {
-                    cx.with_element_id(Some("blocks"), |cx| {
-                        self.paint_blocks(layout, cx);
-                    });
-                }
+                    if !layout.blocks.is_empty() {
+                        cx.with_element_id(Some("blocks"), |cx| {
+                            self.paint_blocks(layout, cx);
+                        });
+                    }
 
-                self.paint_scrollbar(layout, cx);
-                self.paint_mouse_context_menu(layout, cx);
-            });
+                    self.paint_scrollbar(layout, cx);
+                    self.paint_mouse_context_menu(layout, cx);
+                });
+            })
         })
     }
 }

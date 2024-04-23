@@ -1305,254 +1305,57 @@ impl<'a> WindowContext<'a> {
         self.window.tooltip_bounds.take();
 
         // Layout all root elements.
+        let mut prepaint_cx = self.prepaint_context();
         let mut root_element = self.window.root_view.as_ref().unwrap().clone().into_any();
-        root_element.prepaint_as_root(Point::default(), self.window.viewport_size.into(), self);
+        root_element.prepaint_as_root(
+            Point::default(),
+            self.window.viewport_size.into(),
+            &mut prepaint_cx,
+        );
 
         let mut sorted_deferred_draws =
             (0..self.window.next_frame.deferred_draws.len()).collect::<SmallVec<[_; 8]>>();
         sorted_deferred_draws.sort_by_key(|ix| self.window.next_frame.deferred_draws[*ix].priority);
-        self.prepaint_deferred_draws(&sorted_deferred_draws);
+        prepaint_cx.prepaint_deferred_draws(&sorted_deferred_draws);
 
         let mut prompt_element = None;
         let mut active_drag_element = None;
         let mut tooltip_element = None;
-        if let Some(prompt) = self.window.prompt.take() {
+        if let Some(prompt) = prepaint_cx.window.prompt.take() {
             let mut element = prompt.view.any_view().into_any();
-            element.prepaint_as_root(Point::default(), self.window.viewport_size.into(), self);
+            element.prepaint_as_root(
+                Point::default(),
+                prepaint_cx.window.viewport_size.into(),
+                &mut prepaint_cx,
+            );
             prompt_element = Some(element);
-            self.window.prompt = Some(prompt);
-        } else if let Some(active_drag) = self.app.active_drag.take() {
+            prepaint_cx.window.prompt = Some(prompt);
+        } else if let Some(active_drag) = prepaint_cx.app.active_drag.take() {
             let mut element = active_drag.view.clone().into_any();
-            let offset = self.mouse_position() - active_drag.cursor_offset;
-            element.prepaint_as_root(offset, AvailableSpace::min_size(), self);
+            let offset = prepaint_cx.mouse_position() - active_drag.cursor_offset;
+            element.prepaint_as_root(offset, AvailableSpace::min_size(), &mut prepaint_cx);
             active_drag_element = Some(element);
-            self.app.active_drag = Some(active_drag);
+            prepaint_cx.app.active_drag = Some(active_drag);
         } else {
-            tooltip_element = self.prepaint_tooltip();
+            tooltip_element = prepaint_cx.prepaint_tooltip();
         }
 
         self.window.mouse_hit_test = self.window.next_frame.hit_test(self.window.mouse_position);
 
         // Now actually paint the elements.
+        let mut paint_cx = self.paint_context();
         self.window.draw_phase = DrawPhase::Paint;
-        root_element.paint(self);
+        root_element.paint(&mut paint_cx);
 
-        self.paint_deferred_draws(&sorted_deferred_draws);
+        paint_cx.paint_deferred_draws(&sorted_deferred_draws);
 
         if let Some(mut prompt_element) = prompt_element {
-            prompt_element.paint(self)
+            prompt_element.paint(&mut paint_cx)
         } else if let Some(mut drag_element) = active_drag_element {
-            drag_element.paint(self);
+            drag_element.paint(&mut paint_cx);
         } else if let Some(mut tooltip_element) = tooltip_element {
-            tooltip_element.paint(self);
+            tooltip_element.paint(&mut paint_cx);
         }
-    }
-
-    fn prepaint_tooltip(&mut self) -> Option<AnyElement> {
-        let tooltip_request = self.window.next_frame.tooltip_requests.last().cloned()?;
-        let tooltip_request = tooltip_request.unwrap();
-        let mut element = tooltip_request.tooltip.view.clone().into_any();
-        let mouse_position = tooltip_request.tooltip.mouse_position;
-        let tooltip_size = element.layout_as_root(AvailableSpace::min_size(), self);
-
-        let mut tooltip_bounds = Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
-        let window_bounds = Bounds {
-            origin: Point::default(),
-            size: self.viewport_size(),
-        };
-
-        if tooltip_bounds.right() > window_bounds.right() {
-            let new_x = mouse_position.x - tooltip_bounds.size.width - px(1.);
-            if new_x >= Pixels::ZERO {
-                tooltip_bounds.origin.x = new_x;
-            } else {
-                tooltip_bounds.origin.x = cmp::max(
-                    Pixels::ZERO,
-                    tooltip_bounds.origin.x - tooltip_bounds.right() - window_bounds.right(),
-                );
-            }
-        }
-
-        if tooltip_bounds.bottom() > window_bounds.bottom() {
-            let new_y = mouse_position.y - tooltip_bounds.size.height - px(1.);
-            if new_y >= Pixels::ZERO {
-                tooltip_bounds.origin.y = new_y;
-            } else {
-                tooltip_bounds.origin.y = cmp::max(
-                    Pixels::ZERO,
-                    tooltip_bounds.origin.y - tooltip_bounds.bottom() - window_bounds.bottom(),
-                );
-            }
-        }
-
-        self.with_absolute_element_offset(tooltip_bounds.origin, |cx| element.prepaint(cx));
-
-        self.window.tooltip_bounds = Some(TooltipBounds {
-            id: tooltip_request.id,
-            bounds: tooltip_bounds,
-        });
-        Some(element)
-    }
-
-    fn prepaint_deferred_draws(&mut self, deferred_draw_indices: &[usize]) {
-        assert_eq!(self.window.element_id_stack.len(), 0);
-
-        let mut deferred_draws = mem::take(&mut self.window.next_frame.deferred_draws);
-        for deferred_draw_ix in deferred_draw_indices {
-            let deferred_draw = &mut deferred_draws[*deferred_draw_ix];
-            self.window.element_id_stack = deferred_draw.element_id_stack.clone();
-            self.window.text_style_stack = deferred_draw.text_style_stack.clone();
-            self.window
-                .next_frame
-                .dispatch_tree
-                .set_active_node(deferred_draw.parent_node);
-
-            let prepaint_start = self.prepaint_index();
-            if let Some(element) = deferred_draw.element.as_mut() {
-                self.with_absolute_element_offset(deferred_draw.absolute_offset, |cx| {
-                    element.prepaint(cx)
-                });
-            } else {
-                self.reuse_prepaint(deferred_draw.prepaint_range.clone());
-            }
-            let prepaint_end = self.prepaint_index();
-            deferred_draw.prepaint_range = prepaint_start..prepaint_end;
-        }
-        assert_eq!(
-            self.window.next_frame.deferred_draws.len(),
-            0,
-            "cannot call defer_draw during deferred drawing"
-        );
-        self.window.next_frame.deferred_draws = deferred_draws;
-        self.window.element_id_stack.clear();
-        self.window.text_style_stack.clear();
-    }
-
-    fn paint_deferred_draws(&mut self, deferred_draw_indices: &[usize]) {
-        assert_eq!(self.window.element_id_stack.len(), 0);
-
-        let mut deferred_draws = mem::take(&mut self.window.next_frame.deferred_draws);
-        for deferred_draw_ix in deferred_draw_indices {
-            let mut deferred_draw = &mut deferred_draws[*deferred_draw_ix];
-            self.window.element_id_stack = deferred_draw.element_id_stack.clone();
-            self.window
-                .next_frame
-                .dispatch_tree
-                .set_active_node(deferred_draw.parent_node);
-
-            let paint_start = self.paint_index();
-            if let Some(element) = deferred_draw.element.as_mut() {
-                element.paint(self);
-            } else {
-                self.reuse_paint(deferred_draw.paint_range.clone());
-            }
-            let paint_end = self.paint_index();
-            deferred_draw.paint_range = paint_start..paint_end;
-        }
-        self.window.next_frame.deferred_draws = deferred_draws;
-        self.window.element_id_stack.clear();
-    }
-
-    pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
-        PrepaintStateIndex {
-            hitboxes_index: self.window.next_frame.hitboxes.len(),
-            tooltips_index: self.window.next_frame.tooltip_requests.len(),
-            deferred_draws_index: self.window.next_frame.deferred_draws.len(),
-            dispatch_tree_index: self.window.next_frame.dispatch_tree.len(),
-            accessed_element_states_index: self.window.next_frame.accessed_element_states.len(),
-            line_layout_index: self.window.text_system.layout_index(),
-        }
-    }
-
-    pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
-        let window = &mut self.window;
-        window.next_frame.hitboxes.extend(
-            window.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
-                .iter()
-                .cloned(),
-        );
-        window.next_frame.tooltip_requests.extend(
-            window.rendered_frame.tooltip_requests
-                [range.start.tooltips_index..range.end.tooltips_index]
-                .iter_mut()
-                .map(|request| request.take()),
-        );
-        window.next_frame.accessed_element_states.extend(
-            window.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
-                ..range.end.accessed_element_states_index]
-                .iter()
-                .cloned(),
-        );
-        window
-            .text_system
-            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
-
-        let reused_subtree = window.next_frame.dispatch_tree.reuse_subtree(
-            range.start.dispatch_tree_index..range.end.dispatch_tree_index,
-            &mut window.rendered_frame.dispatch_tree,
-        );
-        window.next_frame.deferred_draws.extend(
-            window.rendered_frame.deferred_draws
-                [range.start.deferred_draws_index..range.end.deferred_draws_index]
-                .iter()
-                .map(|deferred_draw| DeferredDraw {
-                    parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
-                    element_id_stack: deferred_draw.element_id_stack.clone(),
-                    text_style_stack: deferred_draw.text_style_stack.clone(),
-                    priority: deferred_draw.priority,
-                    element: None,
-                    absolute_offset: deferred_draw.absolute_offset,
-                    prepaint_range: deferred_draw.prepaint_range.clone(),
-                    paint_range: deferred_draw.paint_range.clone(),
-                }),
-        );
-    }
-
-    pub(crate) fn paint_index(&self) -> PaintIndex {
-        PaintIndex {
-            scene_index: self.window.next_frame.scene.len(),
-            mouse_listeners_index: self.window.next_frame.mouse_listeners.len(),
-            input_handlers_index: self.window.next_frame.input_handlers.len(),
-            cursor_styles_index: self.window.next_frame.cursor_styles.len(),
-            accessed_element_states_index: self.window.next_frame.accessed_element_states.len(),
-            line_layout_index: self.window.text_system.layout_index(),
-        }
-    }
-
-    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
-        let window = &mut self.cx.window;
-
-        window.next_frame.cursor_styles.extend(
-            window.rendered_frame.cursor_styles
-                [range.start.cursor_styles_index..range.end.cursor_styles_index]
-                .iter()
-                .cloned(),
-        );
-        window.next_frame.input_handlers.extend(
-            window.rendered_frame.input_handlers
-                [range.start.input_handlers_index..range.end.input_handlers_index]
-                .iter_mut()
-                .map(|handler| handler.take()),
-        );
-        window.next_frame.mouse_listeners.extend(
-            window.rendered_frame.mouse_listeners
-                [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
-                .iter_mut()
-                .map(|listener| listener.take()),
-        );
-        window.next_frame.accessed_element_states.extend(
-            window.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
-                ..range.end.accessed_element_states_index]
-                .iter()
-                .cloned(),
-        );
-        window
-            .text_system
-            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
-        window.next_frame.scene.replay(
-            range.start.scene_index..range.end.scene_index,
-            &window.rendered_frame.scene,
-        );
     }
 
     #[profiling::function]
@@ -3627,6 +3430,139 @@ impl<'a> PrepaintContext<'a> {
         window.next_frame.hitboxes.push(hitbox.clone());
         hitbox
     }
+
+    fn prepaint_deferred_draws(&mut self, deferred_draw_indices: &[usize]) {
+        assert_eq!(self.window.element_id_stack.len(), 0);
+
+        let mut deferred_draws = mem::take(&mut self.window.next_frame.deferred_draws);
+        for deferred_draw_ix in deferred_draw_indices {
+            let deferred_draw = &mut deferred_draws[*deferred_draw_ix];
+            self.window.element_id_stack = deferred_draw.element_id_stack.clone();
+            self.window.text_style_stack = deferred_draw.text_style_stack.clone();
+            self.window
+                .next_frame
+                .dispatch_tree
+                .set_active_node(deferred_draw.parent_node);
+
+            let prepaint_start = self.prepaint_index();
+            if let Some(element) = deferred_draw.element.as_mut() {
+                element.prepaint_at(deferred_draw.absolute_offset, self);
+            } else {
+                self.reuse_prepaint(deferred_draw.prepaint_range.clone());
+            }
+            let prepaint_end = self.prepaint_index();
+            deferred_draw.prepaint_range = prepaint_start..prepaint_end;
+        }
+        assert_eq!(
+            self.window.next_frame.deferred_draws.len(),
+            0,
+            "cannot call defer_draw during deferred drawing"
+        );
+        self.window.next_frame.deferred_draws = deferred_draws;
+        self.window.element_id_stack.clear();
+        self.window.text_style_stack.clear();
+    }
+
+    fn prepaint_tooltip(&mut self) -> Option<AnyElement> {
+        let tooltip_request = self.window.next_frame.tooltip_requests.last().cloned()?;
+        let tooltip_request = tooltip_request.unwrap();
+        let mut element = tooltip_request.tooltip.view.clone().into_any();
+        let mouse_position = tooltip_request.tooltip.mouse_position;
+        let tooltip_size = element.layout_as_root(AvailableSpace::min_size(), self);
+
+        let mut tooltip_bounds = Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
+        let window_bounds = Bounds {
+            origin: Point::default(),
+            size: self.viewport_size(),
+        };
+
+        if tooltip_bounds.right() > window_bounds.right() {
+            let new_x = mouse_position.x - tooltip_bounds.size.width - px(1.);
+            if new_x >= Pixels::ZERO {
+                tooltip_bounds.origin.x = new_x;
+            } else {
+                tooltip_bounds.origin.x = cmp::max(
+                    Pixels::ZERO,
+                    tooltip_bounds.origin.x - tooltip_bounds.right() - window_bounds.right(),
+                );
+            }
+        }
+
+        if tooltip_bounds.bottom() > window_bounds.bottom() {
+            let new_y = mouse_position.y - tooltip_bounds.size.height - px(1.);
+            if new_y >= Pixels::ZERO {
+                tooltip_bounds.origin.y = new_y;
+            } else {
+                tooltip_bounds.origin.y = cmp::max(
+                    Pixels::ZERO,
+                    tooltip_bounds.origin.y - tooltip_bounds.bottom() - window_bounds.bottom(),
+                );
+            }
+        }
+
+        element.prepaint_at(tooltip_bounds.origin, self);
+
+        self.window.tooltip_bounds = Some(TooltipBounds {
+            id: tooltip_request.id,
+            bounds: tooltip_bounds,
+        });
+        Some(element)
+    }
+
+    pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
+        PrepaintStateIndex {
+            hitboxes_index: self.window.next_frame.hitboxes.len(),
+            tooltips_index: self.window.next_frame.tooltip_requests.len(),
+            deferred_draws_index: self.window.next_frame.deferred_draws.len(),
+            dispatch_tree_index: self.window.next_frame.dispatch_tree.len(),
+            accessed_element_states_index: self.window.next_frame.accessed_element_states.len(),
+            line_layout_index: self.window.text_system.layout_index(),
+        }
+    }
+
+    pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        let window = &mut self.window;
+        window.next_frame.hitboxes.extend(
+            window.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+                .iter()
+                .cloned(),
+        );
+        window.next_frame.tooltip_requests.extend(
+            window.rendered_frame.tooltip_requests
+                [range.start.tooltips_index..range.end.tooltips_index]
+                .iter_mut()
+                .map(|request| request.take()),
+        );
+        window.next_frame.accessed_element_states.extend(
+            window.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                ..range.end.accessed_element_states_index]
+                .iter()
+                .cloned(),
+        );
+        window
+            .text_system
+            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+
+        let reused_subtree = window.next_frame.dispatch_tree.reuse_subtree(
+            range.start.dispatch_tree_index..range.end.dispatch_tree_index,
+            &mut window.rendered_frame.dispatch_tree,
+        );
+        window.next_frame.deferred_draws.extend(
+            window.rendered_frame.deferred_draws
+                [range.start.deferred_draws_index..range.end.deferred_draws_index]
+                .iter()
+                .map(|deferred_draw| DeferredDraw {
+                    parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                    element_id_stack: deferred_draw.element_id_stack.clone(),
+                    text_style_stack: deferred_draw.text_style_stack.clone(),
+                    priority: deferred_draw.priority,
+                    element: None,
+                    absolute_offset: deferred_draw.absolute_offset,
+                    prepaint_range: deferred_draw.prepaint_range.clone(),
+                    paint_range: deferred_draw.paint_range.clone(),
+                }),
+        );
+    }
 }
 
 impl Borrow<AppContext> for PrepaintContext<'_> {
@@ -4223,6 +4159,78 @@ impl<'a> PaintContext<'a> {
                 content_mask,
                 image_buffer,
             });
+    }
+
+    fn paint_deferred_draws(&mut self, deferred_draw_indices: &[usize]) {
+        assert_eq!(self.window.element_id_stack.len(), 0);
+
+        let mut deferred_draws = mem::take(&mut self.window.next_frame.deferred_draws);
+        for deferred_draw_ix in deferred_draw_indices {
+            let mut deferred_draw = &mut deferred_draws[*deferred_draw_ix];
+            self.window.element_id_stack = deferred_draw.element_id_stack.clone();
+            self.window
+                .next_frame
+                .dispatch_tree
+                .set_active_node(deferred_draw.parent_node);
+
+            let paint_start = self.paint_index();
+            if let Some(element) = deferred_draw.element.as_mut() {
+                element.paint(self);
+            } else {
+                self.reuse_paint(deferred_draw.paint_range.clone());
+            }
+            let paint_end = self.paint_index();
+            deferred_draw.paint_range = paint_start..paint_end;
+        }
+        self.window.next_frame.deferred_draws = deferred_draws;
+        self.window.element_id_stack.clear();
+    }
+
+    pub(crate) fn paint_index(&self) -> PaintIndex {
+        PaintIndex {
+            scene_index: self.window.next_frame.scene.len(),
+            mouse_listeners_index: self.window.next_frame.mouse_listeners.len(),
+            input_handlers_index: self.window.next_frame.input_handlers.len(),
+            cursor_styles_index: self.window.next_frame.cursor_styles.len(),
+            accessed_element_states_index: self.window.next_frame.accessed_element_states.len(),
+            line_layout_index: self.window.text_system.layout_index(),
+        }
+    }
+
+    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        let window = &mut self.window;
+
+        window.next_frame.cursor_styles.extend(
+            window.rendered_frame.cursor_styles
+                [range.start.cursor_styles_index..range.end.cursor_styles_index]
+                .iter()
+                .cloned(),
+        );
+        window.next_frame.input_handlers.extend(
+            window.rendered_frame.input_handlers
+                [range.start.input_handlers_index..range.end.input_handlers_index]
+                .iter_mut()
+                .map(|handler| handler.take()),
+        );
+        window.next_frame.mouse_listeners.extend(
+            window.rendered_frame.mouse_listeners
+                [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
+                .iter_mut()
+                .map(|listener| listener.take()),
+        );
+        window.next_frame.accessed_element_states.extend(
+            window.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                ..range.end.accessed_element_states_index]
+                .iter()
+                .cloned(),
+        );
+        window
+            .text_system
+            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+        window.next_frame.scene.replay(
+            range.start.scene_index..range.end.scene_index,
+            &window.rendered_frame.scene,
+        );
     }
 }
 
