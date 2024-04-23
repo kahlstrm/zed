@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::{
     point, px, size, AbsoluteLength, Asset, Bounds, DefiniteLength, DevicePixels, Element,
     ElementContext, Hitbox, ImageData, InteractiveElement, Interactivity, IntoElement, LayoutId,
-    Length, Pixels, SharedUri, Size, StyleRefinement, Styled, SvgSize, UriOrPath, WindowContext,
+    Length, Pixels, PrepaintContext, RequestLayoutContext, SharedUri, Size, StyleRefinement,
+    Styled, SvgSize, UriOrPath, WindowContext,
 };
 use futures::{AsyncReadExt, Future};
 use image::{ImageBuffer, ImageError};
@@ -232,7 +233,10 @@ impl Element for Img {
     type RequestLayoutState = ();
     type PrepaintState = Option<Hitbox>;
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let layout_id = self.interactivity.request_layout(cx, |mut style, cx| {
             if let Some(data) = self.source.data(cx) {
                 let image_size = data.size();
@@ -260,7 +264,7 @@ impl Element for Img {
         &mut self,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<Hitbox> {
         self.interactivity
             .prepaint(bounds, bounds.size, cx, |_, _, hitbox, _| hitbox)
@@ -271,7 +275,7 @@ impl Element for Img {
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         hitbox: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let source = self.source.clone();
         self.interactivity

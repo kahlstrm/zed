@@ -6,8 +6,9 @@
 
 use crate::{
     point, px, size, AnyElement, AvailableSpace, Bounds, ContentMask, Element, ElementContext,
-    ElementId, Hitbox, InteractiveElement, Interactivity, IntoElement, LayoutId, Pixels, Render,
-    ScrollHandle, Size, StyleRefinement, Styled, View, ViewContext, WindowContext,
+    ElementId, Hitbox, InteractiveElement, Interactivity, IntoElement, LayoutId, PaintContext,
+    Pixels, PrepaintContext, Render, RequestLayoutContext, ScrollHandle, Size, StyleRefinement,
+    Styled, View, ViewContext, WindowContext,
 };
 use smallvec::SmallVec;
 use std::{cell::RefCell, cmp, ops::Range, rc::Rc};
@@ -107,7 +108,10 @@ impl Element for UniformList {
     type RequestLayoutState = UniformListFrameState;
     type PrepaintState = Option<Hitbox>;
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let max_items = self.item_count;
         let item_size = self.measure_item(None, cx);
         let layout_id = self.interactivity.request_layout(cx, |style, cx| {
@@ -141,7 +145,7 @@ impl Element for UniformList {
         &mut self,
         bounds: Bounds<Pixels>,
         frame_state: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<Hitbox> {
         let style = self.interactivity.compute_style(None, cx);
         let border = style.border_widths.to_pixels(cx.rem_size());
@@ -239,7 +243,7 @@ impl Element for UniformList {
         bounds: Bounds<crate::Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         hitbox: &mut Option<Hitbox>,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         self.interactivity
             .paint(bounds, hitbox.as_ref(), cx, |_, cx| {
@@ -265,7 +269,7 @@ impl UniformList {
         self
     }
 
-    fn measure_item(&self, list_width: Option<Pixels>, cx: &mut ElementContext) -> Size<Pixels> {
+    fn measure_item(&self, list_width: Option<Pixels>, cx: &mut WindowContext) -> Size<Pixels> {
         if self.item_count == 0 {
             return Size::default();
         }

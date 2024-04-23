@@ -1,8 +1,8 @@
 use crate::{
     ActiveTooltip, AnyTooltip, AnyView, Bounds, DispatchPhase, Element, ElementContext, ElementId,
     HighlightStyle, Hitbox, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, SharedString, Size, TextRun, TextStyle, WhiteSpace, WindowContext, WrappedLine,
-    TOOLTIP_DELAY,
+    PaintContext, Pixels, Point, PrepaintContext, RequestLayoutContext, SharedString, Size,
+    TextRun, TextStyle, WhiteSpace, WindowContext, WrappedLine, TOOLTIP_DELAY,
 };
 use anyhow::anyhow;
 use parking_lot::{Mutex, MutexGuard};
@@ -20,7 +20,10 @@ impl Element for &'static str {
     type RequestLayoutState = TextState;
     type PrepaintState = ();
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextState::default();
         let layout_id = state.layout(SharedString::from(*self), None, cx);
         (layout_id, state)
@@ -30,7 +33,7 @@ impl Element for &'static str {
         &mut self,
         _bounds: Bounds<Pixels>,
         _text_state: &mut Self::RequestLayoutState,
-        _cx: &mut ElementContext,
+        _cx: &mut PrepaintContext,
     ) {
     }
 
@@ -39,7 +42,7 @@ impl Element for &'static str {
         bounds: Bounds<Pixels>,
         text_state: &mut TextState,
         _: &mut (),
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         text_state.paint(bounds, self, cx)
     }
@@ -65,7 +68,10 @@ impl Element for SharedString {
     type RequestLayoutState = TextState;
     type PrepaintState = ();
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextState::default();
         let layout_id = state.layout(self.clone(), None, cx);
         (layout_id, state)
@@ -75,7 +81,7 @@ impl Element for SharedString {
         &mut self,
         _bounds: Bounds<Pixels>,
         _text_state: &mut Self::RequestLayoutState,
-        _cx: &mut ElementContext,
+        _cx: &mut PrepaintContext,
     ) {
     }
 
@@ -84,7 +90,7 @@ impl Element for SharedString {
         bounds: Bounds<Pixels>,
         text_state: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let text_str: &str = self.as_ref();
         text_state.paint(bounds, text_str, cx)
@@ -151,7 +157,10 @@ impl Element for StyledText {
     type RequestLayoutState = TextState;
     type PrepaintState = ();
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextState::default();
         let layout_id = state.layout(self.text.clone(), self.runs.take(), cx);
         (layout_id, state)
@@ -161,7 +170,7 @@ impl Element for StyledText {
         &mut self,
         _bounds: Bounds<Pixels>,
         _state: &mut Self::RequestLayoutState,
-        _cx: &mut ElementContext,
+        _cx: &mut PrepaintContext,
     ) {
     }
 
@@ -170,7 +179,7 @@ impl Element for StyledText {
         bounds: Bounds<Pixels>,
         text_state: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         text_state.paint(bounds, &self.text, cx)
     }
@@ -204,7 +213,7 @@ impl TextState {
         &mut self,
         text: SharedString,
         runs: Option<Vec<TextRun>>,
-        cx: &mut ElementContext,
+        cx: &mut RequestLayoutContext,
     ) -> LayoutId {
         let text_style = cx.text_style();
         let font_size = text_style.font_size.to_pixels(cx.rem_size());
@@ -279,7 +288,7 @@ impl TextState {
         layout_id
     }
 
-    fn paint(&mut self, bounds: Bounds<Pixels>, text: &str, cx: &mut ElementContext) {
+    fn paint(&mut self, bounds: Bounds<Pixels>, text: &str, cx: &mut PaintContext) {
         let element_state = self.lock();
         let element_state = element_state
             .as_ref()
@@ -405,7 +414,10 @@ impl Element for InteractiveText {
     type RequestLayoutState = TextState;
     type PrepaintState = Hitbox;
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (LayoutId, Self::RequestLayoutState) {
+    fn request_layout(
+        &mut self,
+        cx: &mut RequestLayoutContext,
+    ) -> (LayoutId, Self::RequestLayoutState) {
         self.text.request_layout(cx)
     }
 
@@ -413,7 +425,7 @@ impl Element for InteractiveText {
         &mut self,
         bounds: Bounds<Pixels>,
         state: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Hitbox {
         cx.with_element_state::<InteractiveTextState, _>(
             Some(self.element_id.clone()),
@@ -442,7 +454,7 @@ impl Element for InteractiveText {
         bounds: Bounds<Pixels>,
         text_state: &mut Self::RequestLayoutState,
         hitbox: &mut Hitbox,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         cx.with_element_state::<InteractiveTextState, _>(
             Some(self.element_id.clone()),

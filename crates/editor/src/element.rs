@@ -23,12 +23,12 @@ use git::{blame::BlameEntry, diff::DiffHunkStatus, Oid};
 use gpui::{
     anchored, deferred, div, fill, outline, point, px, quad, relative, size, svg,
     transparent_black, Action, AnchorCorner, AnyElement, AvailableSpace, Bounds, ClipboardItem,
-    ContentMask, Corners, CursorStyle, DispatchPhase, Edges, Element, ElementContext,
-    ElementInputHandler, Entity, Hitbox, Hsla, InteractiveElement, IntoElement,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    ParentElement, Pixels, ScrollDelta, ScrollWheelEvent, ShapedLine, SharedString, Size, Stateful,
-    StatefulInteractiveElement, Style, Styled, TextRun, TextStyle, TextStyleRefinement, View,
-    ViewContext, WeakView, WindowContext,
+    ContentMask, Corners, CursorStyle, DispatchPhase, Edges, Element, ElementInputHandler, Entity,
+    Hitbox, Hsla, InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintContext, PaintQuad, ParentElement, Pixels,
+    PrepaintContext, RequestLayoutContext, ScrollDelta, ScrollWheelEvent, ShapedLine, SharedString,
+    Size, Stateful, StatefulInteractiveElement, Style, Styled, TextRun, TextStyle,
+    TextStyleRefinement, View, ViewContext, WeakView, WindowContext,
 };
 use itertools::Itertools;
 use language::language_settings::ShowWhitespaceSetting;
@@ -132,7 +132,7 @@ impl EditorElement {
         }
     }
 
-    fn register_actions(&self, cx: &mut WindowContext) {
+    fn register_actions(&self, cx: &mut PaintContext) {
         let view = &self.editor;
         view.update(cx, |editor, cx| {
             for action in editor.editor_actions.iter() {
@@ -367,7 +367,7 @@ impl EditorElement {
         register_action(view, cx, Editor::open_active_item_in_terminal)
     }
 
-    fn register_key_listeners(&self, cx: &mut ElementContext, layout: &EditorLayout) {
+    fn register_key_listeners(&self, cx: &mut PaintContext, layout: &EditorLayout) {
         let position_map = layout.position_map.clone();
         cx.on_key_event({
             let editor = self.editor.clone();
@@ -691,7 +691,7 @@ impl EditorElement {
         snapshot: &EditorSnapshot,
         start_row: u32,
         end_row: u32,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> (
         Vec<(PlayerColor, Vec<SelectionLayout>)>,
         BTreeMap<u32, bool>,
@@ -819,7 +819,7 @@ impl EditorElement {
         scroll_pixel_position: gpui::Point<Pixels>,
         line_height: Pixels,
         line_layouts: &[LineWithInvisibles],
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Vec<FoldLayout> {
         snapshot
             .folds_in_range(visible_anchor_range.clone())
@@ -887,7 +887,7 @@ impl EditorElement {
         line_height: Pixels,
         em_width: Pixels,
         autoscroll_containing_element: bool,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Vec<CursorLayout> {
         let mut autoscroll_bounds = None;
         let cursor_layouts = self.editor.update(cx, |editor, cx| {
@@ -1013,7 +1013,7 @@ impl EditorElement {
         bounds: Bounds<Pixels>,
         scroll_position: gpui::Point<f32>,
         rows_per_page: f32,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<ScrollbarLayout> {
         let scrollbar_settings = EditorSettings::get_global(cx).scrollbar;
         let show_scrollbars = match scrollbar_settings.show {
@@ -1082,7 +1082,7 @@ impl EditorElement {
         gutter_settings: crate::editor_settings::Gutter,
         scroll_pixel_position: gpui::Point<Pixels>,
         gutter_hitbox: &Hitbox,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Vec<Option<AnyElement>> {
         let mut indicators = self.editor.update(cx, |editor, cx| {
             editor.render_fold_indicators(
@@ -1155,7 +1155,7 @@ impl EditorElement {
         content_origin: gpui::Point<Pixels>,
         scroll_pixel_position: gpui::Point<Pixels>,
         line_height: Pixels,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<AnyElement> {
         if !self
             .editor
@@ -1220,7 +1220,7 @@ impl EditorElement {
         line_height: Pixels,
         gutter_hitbox: &Hitbox,
         max_width: Option<Pixels>,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<Vec<AnyElement>> {
         if !self
             .editor
@@ -1285,7 +1285,7 @@ impl EditorElement {
         scroll_pixel_position: gpui::Point<Pixels>,
         gutter_dimensions: &GutterDimensions,
         gutter_hitbox: &Hitbox,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Option<AnyElement> {
         let mut active = false;
         let mut button = None;
@@ -1372,7 +1372,7 @@ impl EditorElement {
         active_rows: &BTreeMap<u32, bool>,
         newest_selection_head: Option<DisplayPoint>,
         snapshot: &EditorSnapshot,
-        cx: &ElementContext,
+        cx: &PrepaintContext,
     ) -> (
         Vec<Option<ShapedLine>>,
         Vec<Option<(FoldStatus, BufferRow, bool)>>,
@@ -1465,7 +1465,7 @@ impl EditorElement {
         rows: Range<u32>,
         line_number_layouts: &[Option<ShapedLine>],
         snapshot: &EditorSnapshot,
-        cx: &ElementContext,
+        cx: &PrepaintContext,
     ) -> Vec<LineWithInvisibles> {
         if rows.start >= rows.end {
             return Vec::new();
@@ -1530,7 +1530,7 @@ impl EditorElement {
         text_x: Pixels,
         line_height: Pixels,
         line_layouts: &[LineWithInvisibles],
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Vec<BlockLayout> {
         let mut block_id = 0;
         let (fixed_blocks, non_fixed_blocks) = snapshot
@@ -1544,7 +1544,7 @@ impl EditorElement {
                             available_space: Size<AvailableSpace>,
                             block_id: usize,
                             block_row_start: u32,
-                            cx: &mut ElementContext| {
+                            cx: &mut PrepaintContext| {
             let mut element = match block {
                 TransformBlock::Custom(block) => {
                     let align_to = block
@@ -1865,7 +1865,7 @@ impl EditorElement {
         hitbox: &Hitbox,
         line_height: Pixels,
         scroll_pixel_position: gpui::Point<Pixels>,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) {
         for block in blocks {
             let mut origin = hitbox.origin
@@ -1893,7 +1893,7 @@ impl EditorElement {
         scroll_pixel_position: gpui::Point<Pixels>,
         line_layouts: &[LineWithInvisibles],
         newest_selection_head: DisplayPoint,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> bool {
         let max_height = cmp::min(
             12. * line_height,
@@ -1933,7 +1933,7 @@ impl EditorElement {
         true
     }
 
-    fn layout_mouse_context_menu(&self, cx: &mut ElementContext) -> Option<AnyElement> {
+    fn layout_mouse_context_menu(&self, cx: &mut PrepaintContext) -> Option<AnyElement> {
         let mouse_context_menu = self.editor.read(cx).mouse_context_menu.as_ref()?;
         let mut element = deferred(
             anchored()
@@ -1961,7 +1961,7 @@ impl EditorElement {
         line_layouts: &[LineWithInvisibles],
         line_height: Pixels,
         em_width: Pixels,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) {
         struct MeasuredHoverPopover {
             element: AnyElement,
@@ -2021,7 +2021,7 @@ impl EditorElement {
         }
         overall_height += HOVER_POPOVER_GAP;
 
-        fn draw_occluder(width: Pixels, origin: gpui::Point<Pixels>, cx: &mut ElementContext) {
+        fn draw_occluder(width: Pixels, origin: gpui::Point<Pixels>, cx: &mut PrepaintContext) {
             let mut occlusion = div()
                 .size_full()
                 .occlude()
@@ -2067,7 +2067,7 @@ impl EditorElement {
         }
     }
 
-    fn paint_background(&self, layout: &EditorLayout, cx: &mut ElementContext) {
+    fn paint_background(&self, layout: &EditorLayout, cx: &mut PaintContext) {
         cx.paint_layer(layout.hitbox.bounds, |cx| {
             let scroll_top = layout.position_map.snapshot.scroll_position().y;
             let gutter_bg = cx.theme().colors().editor_gutter_background;
@@ -2188,7 +2188,7 @@ impl EditorElement {
         })
     }
 
-    fn paint_gutter(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_gutter(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         let line_height = layout.position_map.line_height;
 
         let scroll_position = layout.position_map.snapshot.scroll_position();
@@ -2236,7 +2236,7 @@ impl EditorElement {
         })
     }
 
-    fn paint_diff_hunks(layout: &EditorLayout, cx: &mut ElementContext) {
+    fn paint_diff_hunks(layout: &EditorLayout, cx: &mut PaintContext) {
         if layout.display_hunks.is_empty() {
             return;
         }
@@ -2342,7 +2342,7 @@ impl EditorElement {
         })
     }
 
-    fn paint_blamed_display_rows(&self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_blamed_display_rows(&self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         let Some(blamed_display_rows) = layout.blamed_display_rows.take() else {
             return;
         };
@@ -2354,7 +2354,7 @@ impl EditorElement {
         })
     }
 
-    fn paint_text(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_text(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         cx.with_content_mask(
             Some(ContentMask {
                 bounds: layout.text_hitbox.bounds,
@@ -2386,7 +2386,7 @@ impl EditorElement {
     fn paint_highlights(
         &mut self,
         layout: &mut EditorLayout,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) -> SmallVec<[Range<DisplayPoint>; 32]> {
         cx.paint_layer(layout.text_hitbox.bounds, |cx| {
             let mut invisible_display_ranges = SmallVec::<[Range<DisplayPoint>; 32]>::new();
@@ -2428,7 +2428,7 @@ impl EditorElement {
         &mut self,
         invisible_display_ranges: &[Range<DisplayPoint>],
         layout: &EditorLayout,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let whitespace_setting = self
             .editor
@@ -2451,7 +2451,7 @@ impl EditorElement {
         }
     }
 
-    fn paint_redactions(&mut self, layout: &EditorLayout, cx: &mut ElementContext) {
+    fn paint_redactions(&mut self, layout: &EditorLayout, cx: &mut PaintContext) {
         if layout.redacted_ranges.is_empty() {
             return;
         }
@@ -2475,13 +2475,13 @@ impl EditorElement {
         });
     }
 
-    fn paint_cursors(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_cursors(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         for cursor in &mut layout.cursors {
             cursor.paint(layout.content_origin, cx);
         }
     }
 
-    fn paint_scrollbar(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_scrollbar(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         let Some(scrollbar_layout) = layout.scrollbar_layout.as_ref() else {
             return;
         };
@@ -2617,7 +2617,7 @@ impl EditorElement {
         &self,
         layout: &EditorLayout,
         scrollbar_layout: &ScrollbarLayout,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         self.editor.update(cx, |editor, cx| {
             if !editor.is_singleton(cx)
@@ -2775,7 +2775,7 @@ impl EditorElement {
         corner_radius: Pixels,
         line_end_overshoot: Pixels,
         layout: &EditorLayout,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let start_row = layout.visible_display_row_range.start;
         let end_row = layout.visible_display_row_range.end;
@@ -2824,7 +2824,7 @@ impl EditorElement {
         }
     }
 
-    fn paint_folds(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_folds(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         if layout.folds.is_empty() {
             return;
         }
@@ -2855,7 +2855,7 @@ impl EditorElement {
         })
     }
 
-    fn paint_inline_blame(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_inline_blame(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         if let Some(mut inline_blame) = layout.inline_blame.take() {
             cx.paint_layer(layout.text_hitbox.bounds, |cx| {
                 inline_blame.paint(cx);
@@ -2863,19 +2863,19 @@ impl EditorElement {
         }
     }
 
-    fn paint_blocks(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_blocks(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         for mut block in layout.blocks.drain(..) {
             block.element.paint(cx);
         }
     }
 
-    fn paint_mouse_context_menu(&mut self, layout: &mut EditorLayout, cx: &mut ElementContext) {
+    fn paint_mouse_context_menu(&mut self, layout: &mut EditorLayout, cx: &mut PaintContext) {
         if let Some(mouse_context_menu) = layout.mouse_context_menu.as_mut() {
             mouse_context_menu.paint(cx);
         }
     }
 
-    fn paint_scroll_wheel_listener(&mut self, layout: &EditorLayout, cx: &mut ElementContext) {
+    fn paint_scroll_wheel_listener(&mut self, layout: &EditorLayout, cx: &mut PaintContext) {
         cx.on_mouse_event({
             let position_map = layout.position_map.clone();
             let editor = self.editor.clone();
@@ -2925,7 +2925,7 @@ impl EditorElement {
         });
     }
 
-    fn paint_mouse_listeners(&mut self, layout: &EditorLayout, cx: &mut ElementContext) {
+    fn paint_mouse_listeners(&mut self, layout: &EditorLayout, cx: &mut PaintContext) {
         self.paint_scroll_wheel_listener(layout, cx);
 
         cx.on_mouse_event({
@@ -3042,7 +3042,7 @@ fn render_inline_blame_entry(
     blame_entry: BlameEntry,
     style: &EditorStyle,
     workspace: Option<WeakView<Workspace>>,
-    cx: &mut ElementContext<'_>,
+    cx: &mut PrepaintContext,
 ) -> AnyElement {
     let relative_timestamp = blame_entry_relative_timestamp(&blame_entry, cx);
 
@@ -3073,7 +3073,7 @@ fn render_blame_entry(
     style: &EditorStyle,
     last_used_color: &mut Option<(PlayerColor, Oid)>,
     editor: View<Editor>,
-    cx: &mut ElementContext<'_>,
+    cx: &mut PrepaintContext,
 ) -> AnyElement {
     let mut sha_color = cx
         .theme()
@@ -3286,7 +3286,7 @@ impl LineWithInvisibles {
         content_origin: gpui::Point<Pixels>,
         whitespace_setting: ShowWhitespaceSetting,
         selection_ranges: &[Range<DisplayPoint>],
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let line_height = layout.position_map.line_height;
         let line_y =
@@ -3318,7 +3318,7 @@ impl LineWithInvisibles {
         row: u32,
         line_height: Pixels,
         whitespace_setting: ShowWhitespaceSetting,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let allowed_invisibles_regions = match whitespace_setting {
             ShowWhitespaceSetting::None => return,
@@ -3365,7 +3365,7 @@ impl Element for EditorElement {
     type RequestLayoutState = ();
     type PrepaintState = EditorLayout;
 
-    fn request_layout(&mut self, cx: &mut ElementContext) -> (gpui::LayoutId, ()) {
+    fn request_layout(&mut self, cx: &mut RequestLayoutContext) -> (gpui::LayoutId, ()) {
         self.editor.update(cx, |editor, cx| {
             editor.set_style(self.style.clone(), cx);
 
@@ -3416,13 +3416,14 @@ impl Element for EditorElement {
         &mut self,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Self::PrepaintState {
         let text_style = TextStyleRefinement {
             font_size: Some(self.style.text.font_size),
             line_height: Some(self.style.text.line_height),
             ..Default::default()
         };
+        cx.set_view_id(self.editor.entity_id());
         cx.with_text_style(Some(text_style), |cx| {
             cx.with_content_mask(Some(ContentMask { bounds }), |cx| {
                 let mut snapshot = self.editor.update(cx, |editor, cx| editor.snapshot(cx));
@@ -3846,13 +3847,12 @@ impl Element for EditorElement {
         bounds: Bounds<gpui::Pixels>,
         _: &mut Self::RequestLayoutState,
         layout: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         let focus_handle = self.editor.focus_handle(cx);
         let key_context = self.editor.read(cx).key_context(cx);
         cx.set_focus_handle(&focus_handle);
         cx.set_key_context(key_context);
-        cx.set_view_id(self.editor.entity_id());
         cx.handle_input(
             &focus_handle,
             ElementInputHandler::new(bounds, self.editor.clone()),
@@ -4205,7 +4205,7 @@ impl CursorLayout {
         &mut self,
         origin: gpui::Point<Pixels>,
         cursor_name: Option<CursorName>,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) {
         if let Some(cursor_name) = cursor_name {
             let bounds = self.bounds(origin);
@@ -4235,7 +4235,7 @@ impl CursorLayout {
         }
     }
 
-    pub fn paint(&mut self, origin: gpui::Point<Pixels>, cx: &mut ElementContext) {
+    pub fn paint(&mut self, origin: gpui::Point<Pixels>, cx: &mut PaintContext) {
         let bounds = self.bounds(origin);
 
         //Draw background or border quad
@@ -4279,7 +4279,7 @@ pub struct HighlightedRangeLine {
 }
 
 impl HighlightedRange {
-    pub fn paint(&self, bounds: Bounds<Pixels>, cx: &mut ElementContext) {
+    pub fn paint(&self, bounds: Bounds<Pixels>, cx: &mut PaintContext) {
         if self.lines.len() >= 2 && self.lines[0].start_x > self.lines[1].end_x {
             self.paint_lines(self.start_y, &self.lines[0..1], bounds, cx);
             self.paint_lines(
@@ -4298,7 +4298,7 @@ impl HighlightedRange {
         start_y: Pixels,
         lines: &[HighlightedRangeLine],
         _bounds: Bounds<Pixels>,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         if lines.is_empty() {
             return;
@@ -4885,7 +4885,7 @@ mod tests {
 
 pub fn register_action<T: Action>(
     view: &View<Editor>,
-    cx: &mut WindowContext,
+    cx: &mut PaintContext,
     listener: impl Fn(&mut Editor, &T, &mut ViewContext<Editor>) + 'static,
 ) {
     let view = view.clone();

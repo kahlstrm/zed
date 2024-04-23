@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use gpui::{Context, View, ViewContext, VisualContext, WindowContext};
+use gpui::{Context, PaintContext, View, ViewContext, VisualContext, WindowContext};
 use language::Language;
 use multi_buffer::MultiBuffer;
 use project::lsp_ext_command::ExpandMacro;
@@ -9,7 +9,7 @@ use text::ToPointUtf16;
 
 use crate::{element::register_action, Editor, ExpandMacroRecursively};
 
-pub fn apply_related_actions(editor: &View<Editor>, cx: &mut WindowContext) {
+pub fn apply_related_actions(editor: &View<Editor>, cx: &mut PaintContext) {
     let is_rust_related = editor.update(cx, |editor, cx| {
         editor
             .buffer()

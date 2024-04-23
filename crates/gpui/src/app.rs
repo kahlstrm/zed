@@ -1050,7 +1050,7 @@ impl AppContext {
     }
 
     /// Register a global listener for actions invoked via the keyboard.
-    pub fn on_action<A: Action>(&mut self, listener: impl Fn(&A, &mut Self) + 'static) {
+    pub fn on_action<A: Action>(&mut self, listener: impl Fn(&A, &mut AppContext) + 'static) {
         self.global_action_listeners
             .entry(TypeId::of::<A>())
             .or_default()

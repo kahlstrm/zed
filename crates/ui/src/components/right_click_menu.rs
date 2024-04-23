@@ -3,8 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{
     anchored, deferred, div, AnchorCorner, AnyElement, Bounds, DismissEvent, DispatchPhase,
     Element, ElementContext, ElementId, Hitbox, InteractiveElement, IntoElement, LayoutId,
-    ManagedView, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, View, VisualContext,
-    WindowContext,
+    ManagedView, MouseButton, MouseDownEvent, PaintContext, ParentElement, Pixels, Point,
+    PrepaintContext, RequestLayoutContext, View, VisualContext, WindowContext,
 };
 
 pub struct RightClickMenu<M: ManagedView> {
@@ -101,7 +101,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
 
     fn request_layout(
         &mut self,
-        cx: &mut ElementContext,
+        cx: &mut RequestLayoutContext,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         self.with_element_state(cx, |this, element_state, cx| {
             let mut menu_layout_id = None;
@@ -150,7 +150,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
         &mut self,
         bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
-        cx: &mut ElementContext,
+        cx: &mut PrepaintContext,
     ) -> Hitbox {
         cx.with_element_id(Some(self.id.clone()), |cx| {
             let hitbox = cx.insert_hitbox(bounds, false);
@@ -172,7 +172,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
         _bounds: Bounds<gpui::Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         hitbox: &mut Self::PrepaintState,
-        cx: &mut ElementContext,
+        cx: &mut PaintContext,
     ) {
         self.with_element_state(cx, |this, element_state, cx| {
             if let Some(mut child) = request_layout.child_element.take() {
