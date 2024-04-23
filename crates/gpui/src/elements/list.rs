@@ -607,6 +607,7 @@ impl StateInner {
         &mut self,
         bounds: Bounds<Pixels>,
         padding: Edges<Pixels>,
+        autoscroll: bool,
         cx: &mut ElementContext,
     ) -> Result<LayoutItemsResponse, ListOffset> {
         cx.transact(|cx| {
@@ -622,12 +623,14 @@ impl StateInner {
                         item.element.prepaint_at(item_origin, cx);
                     });
 
-                    if let Some(autoscroll_bounds) = cx.take_autoscroll() {
-                        if bounds.intersect(&autoscroll_bounds) != autoscroll_bounds {
-                            return Err(ListOffset {
-                                item_ix: item.index,
-                                offset_in_item: autoscroll_bounds.origin.y - item_origin.y,
-                            });
+                    if autoscroll {
+                        if let Some(autoscroll_bounds) = cx.take_autoscroll() {
+                            if bounds.intersect(&autoscroll_bounds) != autoscroll_bounds {
+                                return Err(ListOffset {
+                                    item_ix: item.index,
+                                    offset_in_item: autoscroll_bounds.origin.y - item_origin.y,
+                                });
+                            }
                         }
                     }
 
@@ -758,11 +761,11 @@ impl Element for List {
         }
 
         let padding = style.padding.to_pixels(bounds.size.into(), cx.rem_size());
-        let layout = match state.prepaint_items(bounds, padding, cx) {
+        let layout = match state.prepaint_items(bounds, padding, true, cx) {
             Ok(layout) => layout,
             Err(autoscroll_request) => {
                 state.logical_scroll_top = Some(autoscroll_request);
-                state.prepaint_items(bounds, padding, cx).unwrap()
+                state.prepaint_items(bounds, padding, false, cx).unwrap()
             }
         };
 
