@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use rpc::proto;
 
 pub fn get_supermaven_api_key(
